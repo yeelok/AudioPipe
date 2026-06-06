@@ -64,19 +64,29 @@ pnputil /add-driver "$inf" /install
 # does not create a device node, so nothing appears until we create one. devgen
 # (WDK Tools) creates a software device with our hardware id; PnP then binds the
 # just-installed driver to it. Idempotent via a fixed instance id.
-$hwid = 'root\VirtualAudioDriver'
-$existing = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match 'VirtualAudioDriver' }
-if ($existing) {
-    Write-Host "Device node already present: $(($existing.InstanceId) -join ', ')"
+$hwid     = 'root\VirtualAudioDriver'
+$instance = 'SWD\DEVGEN\AUDIOPIPE'   # devgen creates this from /instanceid AudioPipe
+$devgen = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Filter devgen.exe -Recurse -ErrorAction SilentlyContinue |
+          Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+if (-not $devgen) {
+    Write-Warning "devgen.exe not found (WDK Tools). Create the device manually: Device Manager > Action > Add legacy hardware > install from $inf."
 } else {
-    $devgen = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Filter devgen.exe -Recurse -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
-    if (-not $devgen) {
-        Write-Warning "devgen.exe not found (WDK Tools). Create the device manually: Device Manager > Action > Add legacy hardware > install from $inf."
-    } else {
-        & $devgen.FullName /add /instanceid AudioPipe /hardwareid $hwid
-        Write-Host "Created software device ($hwid)."
+    # Recreate the node so PnP re-evaluates and binds the just-installed driver
+    # (a pre-existing node may still be on the generic c_swdevice.inf).
+    if (Get-PnpDevice -InstanceId $instance -ErrorAction SilentlyContinue) {
+        pnputil /remove-device $instance | Out-Null
     }
+    & $devgen.FullName /add /instanceid AudioPipe /hardwareid $hwid
+    Write-Host "Created software device ($hwid)."
+}
+
+Start-Sleep -Seconds 1
+$bound = (Get-PnpDevice -InstanceId $instance -ErrorAction SilentlyContinue |
+          Get-PnpDeviceProperty DEVPKEY_Device_DriverInfPath -ErrorAction SilentlyContinue).Data
+if ($bound -and $bound -ne 'c_swdevice.inf') {
+    Write-Host "Bound driver: $bound  (device should appear as 'AudioPipe')."
+} else {
+    Write-Warning "Node bound the generic driver ($bound). Check: test-signing ON + rebooted, and the INF's [Manufacturer] build floor covers your OS (see README)."
 }
 
 Write-Host ""

@@ -37,11 +37,17 @@ git clone https://github.com/VirtualDrivers/Virtual-Audio-Driver.git upstream
 ```
 
 `apply_rename.ps1` edits `upstream\Source\Main\VirtualAudioDriver.inx` (the INF
-template, UTF-16), renaming the **render/speaker** endpoint, device description,
-and service to **AudioPipe**. (The driver also exposes a capture/mic endpoint; we
-leave it named as upstream ships it — the sender uses the speaker, not the mic.)
-Pass `-DeviceName "Something Else"` if you want a different name; just keep
-`sender.json`'s `device_name` in sync.
+template, UTF-16) and does two things:
+
+1. Renames the **render/speaker** endpoint, device description, and service to
+   **AudioPipe**. (The driver also exposes a capture/mic endpoint; we leave it
+   named as upstream ships it — the sender uses the speaker, not the mic.) Pass
+   `-DeviceName "Something Else"` for a different name; keep `sender.json`'s
+   `device_name` in sync.
+2. Lowers the `[Manufacturer]` **OS build floor** from `10.0...22000` (upstream
+   targets Windows 11 only) to `10.0...17763` (Win10 1809+). Without this, on
+   Windows 10 PnP reports *"no better matching drivers"* and binds the generic
+   null driver instead of ours. Override with `-MinBuild`.
 
 ## 2. Build (Release / x64)
 
