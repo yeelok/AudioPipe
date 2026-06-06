@@ -66,6 +66,37 @@ build/tools/drift_sim --ppm 200 --minutes 60 --no-correct   # -> GLITCHED (overf
 build/tools/drift_sim --ppm 300 --trace               # print fill/ratio trajectory
 ```
 
+## Pipeline check — core fidelity on real audio (Windows + macOS)
+
+`pipeline_check` runs a real WAV through the **complete receiver DSP path** the
+live system uses — jitter buffer → drift-corrected resampler → lock-free ring →
+device-rate consumer — with **no network and no audio hardware**, and writes an
+output WAV you can listen to plus a stability/fidelity report. It's the offline
+way to answer "is the distortion our pipeline, or the environment?": if the
+output is clean here, the core is fine and any live glitching is the
+network/device side. Unlike the harnesses above it's **portable (no sockets)**,
+so it builds and runs identically on **both** machines (it's part of the normal
+`cmake --build build`; on Windows put vcpkg's `soxr.dll` on `PATH` to run it,
+same as the other binaries).
+
+```sh
+# Run your own audio through the full pipeline and listen to the result:
+build/tools/pipeline_check --in song.wav --out out.wav         # clean -> STABLE
+build/tools/pipeline_check --in song.wav --ppm 500             # +500 ppm clock drift, corrected
+build/tools/pipeline_check --in song.wav --drop 0.02 --reorder 0.05   # loss/reorder -> concealment
+build/tools/pipeline_check --ppm 3000 --no-correct             # generated sine -> GLITCHED (proves detection)
+```
+```bat
+:: Windows (PowerShell), with soxr.dll reachable:
+build\tools\pipeline_check.exe --in song.wav --out out.wav
+```
+
+Flags: `--in FILE` / `--out FILE`, `--frames` (jitter frame size), `--jitter-frames`
+(buffer depth), `--ppm` (sender/receiver clock offset), `--drop P`, `--reorder P`,
+`--no-correct` (disable drift correction), `--seconds`/`--rate`/`--channels` (for the
+generated sine when no `--in`), `--seed`. A fault-free run prints `RESULT: STABLE`
+and exits 0; under/overruns or NaNs print `GLITCHED` and exit non-zero (handy in CI).
+
 ## macOS device + receiver (M3)
 
 The **AudioPipe** virtual input device is a BlackHole fork in `driver-mac/` (build-time
