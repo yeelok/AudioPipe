@@ -1,0 +1,7 @@
+{
+  "listen_port": 4010,
+  "sample_rate": 48000,
+  "channels": 2,
+  "jitter_frames": 3,
+  "log_file": "audiopipe-receiver.log"
+}

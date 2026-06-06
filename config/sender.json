@@ -1,0 +1,9 @@
+{
+  "dest_ip": "192.168.1.50",
+  "dest_port": 4010,
+  "sample_rate": 48000,
+  "channels": 2,
+  "frame_samples": 96,
+  "frames_per_packet": 1,
+  "log_file": "audiopipe-sender.log"
+}

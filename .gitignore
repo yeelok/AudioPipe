@@ -1,0 +1,16 @@
+# Build output
+/build/
+build*/
+cmake-build-*/
+
+# CMake FetchContent cache (deps fetched at configure time)
+/_deps/
+
+# Editor / OS
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Runtime artifacts
+*.log
