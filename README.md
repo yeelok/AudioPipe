@@ -101,9 +101,21 @@ before the driver fork is finished — set `device_name` accordingly in `config/
 
 ## Status
 
-**M4 — Windows sender + driver fork (code complete; build/test on Windows).** Wrote the WASAPI
-loopback sender (capture → packetize → UDP), the Windows Service wrapper, and the
-Virtual-Audio-Driver fork guide. `core` now finds libsoxr cross-platform (pkg-config or
-vcpkg). The sender is **build-blind from this macOS session** — compile and test it on the
-Windows PC. macOS side unaffected: 25 unit tests green. Next is **M5** — real end-to-end over
-the LAN + latency tuning (needs both machines).
+**M5–M7 — running end-to-end over the LAN, with operational logging and auto-start.**
+
+- **M4 built & tested on Windows** (VS 2022/MSVC, vcpkg `soxr`): one include-order fix and the
+  sender compiles; `core` 25/25 tests pass; the WASAPI-loopback → §7 → UDP path is verified on
+  the wire, and §5.7 resilience (no crash / recovers when the receiver is down) holds.
+- **M5 — real Windows → macOS link works**, loss-free, audible on the Mac. Latency: on **Wi-Fi**
+  the network alone is ~18 ms one-way with ~17 ms jitter, so the ≤20 ms target (a **wired**-LAN
+  spec, §9) is not met over Wi-Fi — the pipeline itself sits at ~9 ms on a clean link. **Use
+  wired Ethernet for the ≤20 ms acceptance** (retest pending).
+- **M6 — config + logging (§10) complete:** JSON both sides, plus a sender heartbeat and the
+  receiver's loss/drift/ring logging; clean signal shutdown.
+- **M7 — auto-start (code complete; install + reboot are user steps):** Windows sender as a
+  crash-restarting auto-start Service (`scripts/install_sender_service.ps1`), macOS receiver as a
+  LaunchAgent/LaunchDaemon (`receiver/install_launchd.sh`).
+
+Remaining: the **wired ≤20 ms** retest and the **2-hour soak** (M8), and the optional
+`driver-win` virtual-output fork (WDK build) so Windows apps route per-app instead of capturing
+the default device.
