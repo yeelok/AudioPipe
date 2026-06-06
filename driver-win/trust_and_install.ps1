@@ -57,8 +57,29 @@ certutil -addstore -f TrustedPublisher "$cer" | Out-Null
 Remove-Item "$cer" -ErrorAction SilentlyContinue
 Write-Host "Trusted signer cert: $($cert.Subject)  [$($cert.Thumbprint)]"
 
-# Install (adds the driver to the store and installs it on the matching device).
+# Add the driver package to the store (and install on any matching device).
 pnputil /add-driver "$inf" /install
+
+# This is a ROOT-enumerated software device: pnputil publishes the package but
+# does not create a device node, so nothing appears until we create one. devgen
+# (WDK Tools) creates a software device with our hardware id; PnP then binds the
+# just-installed driver to it. Idempotent via a fixed instance id.
+$hwid = 'root\VirtualAudioDriver'
+$existing = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match 'VirtualAudioDriver' }
+if ($existing) {
+    Write-Host "Device node already present: $(($existing.InstanceId) -join ', ')"
+} else {
+    $devgen = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Filter devgen.exe -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $devgen) {
+        Write-Warning "devgen.exe not found (WDK Tools). Create the device manually: Device Manager > Action > Add legacy hardware > install from $inf."
+    } else {
+        & $devgen.FullName /add /instanceid AudioPipe /hardwareid $hwid
+        Write-Host "Created software device ($hwid)."
+    }
+}
+
 Write-Host ""
-Write-Host "Installed. Verify: Settings > System > Sound should list 'AudioPipe' as an output."
+Write-Host "Done. Verify: Settings > System > Sound should list 'AudioPipe' as an output."
+Write-Host "(Requires test-signing ON + a prior reboot for the .sys to load.)"
 Write-Host "Then set config\sender.json device_name to 'AudioPipe' and (re)start the sender."

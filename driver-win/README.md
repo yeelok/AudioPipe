@@ -81,6 +81,16 @@ bcdedit /set testsigning on
 `trust_and_install.ps1` extracts the certificate the build used to sign the
 driver, adds it to LocalMachine **Root** + **TrustedPublisher** (so Windows
 accepts it), and runs `pnputil /add-driver VirtualAudioDriver.inf /install`.
+Because this is a **root-enumerated** software device, `pnputil` only publishes
+the package — it doesn't create a device node — so the script then runs
+`devgen` (WDK Tools) to create one (`root\VirtualAudioDriver`, instance id
+`AudioPipe`). PnP binds the driver and **AudioPipe** appears under
+*Settings → Sound*. (If `devgen` isn't found, create the node manually:
+*Device Manager → Action → Add legacy hardware → install from the built INF*.)
+
+> Execution policy: if PowerShell refuses to run the script
+> (*"running scripts is disabled"*), unblock it for the current window only:
+> `Set-ExecutionPolicy -Scope Process Bypass -Force`.
 
 > If the build did **not** sign the `.sys` (some WDK setups default `SignMode=Off`),
 > the script says so. In that case self-sign before installing: create a code-
