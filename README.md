@@ -37,8 +37,27 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## Loopback harness (M1)
+
+Runs audio through the real wire path — frames → §7 packets → UDP over `127.0.0.1` → jitter
+buffer → frames — with optional packet loss / reordering, then reports how faithfully the
+output matches the input. Generates a sine signal by default, or reads a WAV with `--in`.
+Writes `<prefix>-input.wav` and `<prefix>-output.wav`. (POSIX sockets; macOS/Linux only.)
+
+```sh
+build/tools/loopback_harness                          # clean path -> bit-transparent: YES
+build/tools/loopback_harness --drop 0.02              # 2% loss -> concealment
+build/tools/loopback_harness --reorder 0.10           # reordering -> corrected, bit-exact
+build/tools/loopback_harness --in song.wav --out-prefix /tmp/t
+```
+
+Flags: `--frames 48..240` (samples/frame), `--channels`, `--rate`, `--seconds`, `--drop P`,
+`--reorder P`, `--jitter DEPTH`, `--port`, `--seed`, `--in FILE.wav`, `--out-prefix`.
+
 ## Status
 
-**M0 — project scaffold.** Core library and test target build; JSON config and the §7 packet
-header layout are implemented and tested. Per-milestone implementations land behind the
-`TODO(Mx)` markers in `core/include/audiopipe/`.
+**M1 — portable core + loopback.** Packet codec, lock-free SPSC ring buffer, and fixed-depth
+jitter buffer (reorder / repeat-last concealment / late-drop / priming) are implemented and
+unit-tested (22 cases). The loopback harness confirms a clean run is bit-transparent, injected
+loss is concealed 1:1, and reordering is corrected. Drift correction (M2) is next: see the
+`TODO(M2)` markers in `core/include/audiopipe/{drift_control,resampler}.h`.

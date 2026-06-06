@@ -14,9 +14,8 @@
 namespace audiopipe {
 namespace {
 
-// Instantiate the header-only template so it is syntax-checked. push/pop are
-// declared-only until M1, so only construction is exercised here.
-[[maybe_unused]] void m0_header_smoke() {
+// Force the header-only template to instantiate so it is syntax-checked.
+[[maybe_unused]] void header_smoke() {
     SpscRingBuffer<float> rb(8);
     (void)rb;
     static_assert(sizeof(PacketHeader) == 18, "wire header size");

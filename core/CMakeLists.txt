@@ -1,6 +1,8 @@
 add_library(audiopipe_core
     src/config.cpp
     src/log.cpp
+    src/packet.cpp
+    src/jitter_buffer.cpp
     src/compile_check.cpp
 )
 

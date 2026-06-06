@@ -61,16 +61,21 @@ AudioPipe/
   honest by `compile_check.cpp`.
 - **Deliverable met:** libs build + tests pass. (Windows build to be confirmed at M4.)
 
-### M1 — Portable core + loopback harness (all on Mac)
+### M1 — Portable core + loopback harness (all on Mac)  ✅ DONE
 Most risk dies here, before any driver work.
-- `packet` (§7) with round-trip unit tests: seq wrap, endianness, format id.
-- `jitter_buffer`: fixed depth, reorder insert, loss detection, late-drop (§8.1–8.3),
-  concealment by repeat-last (§8.2).
-- Lock-free SPSC `ring_buffer` with tests (fill/drain, wrap, no tearing).
-- `loopback_harness`: WAV → real packetizer → UDP `127.0.0.1` → real jitter/ring → WAV,
-  with **fault injection** (drop %, reorder, added jitter).
-- **Acceptance:** clean run is bit-identical input→output; injected loss concealed; reorder
-  handled. (Proves spec §13 bit-transparency with no hardware.)
+- `packet` (§7) — encode/decode, explicit little-endian wire, seq-wrap, truncation/bad-magic
+  rejection, overflow. ✅
+- `jitter_buffer` — fixed depth, reorder correction, repeat-last concealment (§8.2),
+  late-drop (§8.3), priming (§8.1), loss/late/overflow counters. ✅
+- `ring_buffer` — lock-free SPSC, acquire/release, validated with a 200k-item threaded
+  stress test. ✅
+- `loopback_harness` (`tools/`) — sine or WAV → real packetizer → UDP `127.0.0.1` → jitter
+  buffer with lock-step playout → WAV, plus deterministic **fault injection** (drop %, reorder)
+  and a fidelity report. Minimal WAV read/write (`tools/wav.*`). ✅
+- **Acceptance met:** clean run bit-identical (`mismatched=0`); 2% loss → exactly 28/28 frames
+  concealed 1:1; 10% reorder → fully corrected, bit-exact. 22 unit tests green.
+- *Harness note:* playout pops one frame per arrival once primed, keeping buffer fill ≈ depth
+  (an insert-all-then-drain model overflowed the finite reorder window — fixed).
 
 ### M2 — Drift correction in core (§8.4 — hardest algorithm)
 - `resampler` wrapping libsoxr variable-rate mode.

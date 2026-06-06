@@ -31,10 +31,12 @@ FetchContent_MakeAvailable(nlohmann_json)
 # --- Portable core ---------------------------------------------------------
 add_subdirectory(core)
 
+# Dev tools (loopback harness; latency probe later). POSIX-only for now.
+add_subdirectory(tools)
+
 # Platform halves and driver forks arrive in later milestones:
 #   sender/     (M4, Windows)   receiver/  (M3, macOS)
 #   driver-win/ (M4)            driver-mac/ (M3)
-#   tools/      (M1, loopback harness + latency probe)
 
 # --- Tests -----------------------------------------------------------------
 if(AUDIOPIPE_BUILD_TESTS)
