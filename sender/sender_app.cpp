@@ -33,6 +33,12 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
     std::uint16_t         seq = 0;
     std::uint64_t         ts  = 0;
     std::uint64_t         sent = 0;
+    std::uint64_t         last_log_sent = 0;
+
+    // Heartbeat cadence: ~ every 30 s of audio, in packets. Independent of any
+    // wall clock so a quiet source (no packets) simply produces no heartbeat.
+    const std::uint64_t hb_packets =
+        cfg.frame_samples ? (30u * cfg.sample_rate) / cfg.frame_samples : 15000u;
 
     const std::string dev_label =
         cfg.device_name.empty() ? std::string("default render device") : cfg.device_name;
@@ -89,6 +95,13 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
         }
         if (consumed > 0) {
             accum.erase(accum.begin(), accum.begin() + consumed);
+        }
+
+        // Operational heartbeat (spec §10): periodic proof of life + throughput.
+        if (sent - last_log_sent >= hb_packets) {
+            log.info("sender: heartbeat packets_sent=" + std::to_string(sent) +
+                     (silent ? " (source silent)" : ""));
+            last_log_sent = sent;
         }
 
         // Light poll: capture() returns immediately, so sleep ~half a frame to
