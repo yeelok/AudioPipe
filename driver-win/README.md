@@ -2,88 +2,114 @@
 
 The Windows virtual **output** device is a fork of
 [Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver)
-(MIT, based on Microsoft's modern **Sysvad** sample). Apps route their audio to
+(MIT, based on Microsoft's modern **Sysvad** sample). Route any app's audio to
 this device per-application (spec §5.1); the [sender](../sender/README.md) then
-loopback-captures it and streams it to the Mac.
+loopback-captures it and streams it to the Mac. So **only audio you route into
+"AudioPipe" gets sent** — everything else keeps using your normal output.
 
 > Why this base (not Scream): Scream does its networking **in the kernel**, which
 > fights this project's userspace-sender architecture (spec §3/§5.3). Virtual-
 > Audio-Driver is a clean virtual endpoint we capture from userspace, keeping all
-> transport logic in the portable `core/`. See `docs/plan.md` for the full
-> comparison.
+> transport logic in the portable `core/`. See `docs/plan.md` for the comparison.
 
-Unlike the macOS BlackHole fork (customized purely via build flags), this driver
-is forked by cloning upstream and applying a small rename, because it must be
-built with the WDK in Visual Studio.
+This is a **kernel-mode (WDK) driver**. Building/installing it is heavier than the
+rest of the project: it needs the WDK, **test-signing enabled (a reboot)**, and
+elevation. For personal use that's acceptable (spec §1/§11). The upstream clone
+lives under `upstream/` (gitignored — not vendored); our only change is a one-line
+rename applied by `apply_rename.ps1`, so it stays trivially re-pullable.
 
 ## Prerequisites
 
-- Visual Studio 2022 + **Windows Driver Kit (WDK)** matching your SDK
-- A test machine (or VM) where you can enable test-signing — kernel/driver dev
-  is smoother on real hardware
+- **Visual Studio 2022+** with *Desktop development with C++*.
+- The **Windows Driver Kit (WDK)** matching your installed SDK
+  (<https://learn.microsoft.com/windows-hardware/drivers/download-the-wdk>),
+  plus the **WDK Visual Studio extension** so the driver build targets load.
+  Without the WDK, `build.ps1` fails (the driver MSBuild targets are missing).
+- A machine you're willing to put in **test-signing** mode (shows a desktop
+  watermark; reversible).
 
-## 1. Clone upstream into this folder
+## 1. Clone upstream + apply the AudioPipe rename
 
-```bat
+```powershell
 cd driver-win
 git clone https://github.com/VirtualDrivers/Virtual-Audio-Driver.git upstream
+..\driver-win\apply_rename.ps1        # or: .\apply_rename.ps1
 ```
 
-(Keeping it under `upstream/` makes it easy to pull updates and keep our rename
-as a small, visible diff.)
+`apply_rename.ps1` edits `upstream\Source\Main\VirtualAudioDriver.inx` (the INF
+template, UTF-16), renaming the **render/speaker** endpoint, device description,
+and service to **AudioPipe**. (The driver also exposes a capture/mic endpoint; we
+leave it named as upstream ships it — the sender uses the speaker, not the mic.)
+Pass `-DeviceName "Something Else"` if you want a different name; just keep
+`sender.json`'s `device_name` in sync.
 
-## 2. Rename the device to "AudioPipe"
+## 2. Build (Release / x64)
 
-Open the solution in Visual Studio. Change the **render (speaker) endpoint
-friendly name** to `AudioPipe` so it matches `device_name` in `sender.json`:
+```powershell
+.\build.ps1
+```
 
-- In the driver's **`.inf`** — the `[Strings]` section device/endpoint name
-  values (search the INF for the current product/endpoint name strings).
-- In the **source** — the endpoint/topology name strings (grep the project for
-  the existing device name, e.g. its product string, and replace with
-  `AudioPipe`).
-- Optionally set a distinct hardware ID / component GUID so it installs
-  alongside, not over, any existing install.
+Finds MSBuild via `vswhere` and builds the solution. Output:
+`upstream\x64\Release\package\` → `VirtualAudioDriver.sys`, `VirtualAudioDriver.inf`,
+`virtualaudiodriver.cat`. A Release build **test-signs** the `.sys` and
+generates+signs the `.cat` with an auto-created WDK test certificate.
 
-The sender matches `device_name` as a substring, so an exact match isn't
-required — but a clean `AudioPipe` name is clearest.
+## 3. Enable test-signing, then trust + install
 
-## 3. Build
+A test-signed driver won't load until test-signing is on and the machine has
+rebooted. From an **elevated** prompt:
 
-Build the driver project, **Release / x64**. You get `AudioPipe.sys` (or the
-upstream name), its `.inf`, and a `.cat`.
-
-## 4. Enable test-signing and install
-
-Personal use only — test-signing is fine (spec §1, §11). As **Administrator**:
-
-```bat
+```powershell
 bcdedit /set testsigning on
-:: reboot, then:
-pnputil /add-driver path\to\AudioPipe.inf /install
+:: reboot, then (elevated):
+.\trust_and_install.ps1
 ```
 
-If Windows requires a signed catalog even for test-signing, create a self-signed
-test certificate and sign the `.sys`/`.cat` with `signtool` (see the upstream
-repo's signing/install scripts, which automate this), then `pnputil` as above.
+`trust_and_install.ps1` extracts the certificate the build used to sign the
+driver, adds it to LocalMachine **Root** + **TrustedPublisher** (so Windows
+accepts it), and runs `pnputil /add-driver VirtualAudioDriver.inf /install`.
 
-## 5. Confirm
+> If the build did **not** sign the `.sys` (some WDK setups default `SignMode=Off`),
+> the script says so. In that case self-sign before installing: create a code-
+> signing cert (`New-SelfSignedCertificate -Type CodeSigningCert -CertStoreLocation
+> Cert:\LocalMachine\My -Subject "CN=AudioPipe Test"`), then
+> `signtool sign /fd SHA256 /a /n "AudioPipe Test" ...\virtualaudiodriver.cat`
+> (sign the `.cat`, which vouches for the `.sys`), then re-run the install.
+
+## 4. Confirm + wire up the sender
 
 - **Settings → System → Sound** lists **AudioPipe** as an output device.
 - **Volume mixer** lets you set a specific app's output to AudioPipe while other
   apps stay on the default device (spec §13 acceptance).
-- Point `sender.json` `device_name` at `AudioPipe` and run the sender.
+- Point the sender at it and run:
+
+```powershell
+:: in config\sender.json:  "device_name": "AudioPipe"  (substring match)
+build\sender\audiopipe_sender.exe --console --config config\sender.json
+```
+
+Now only the apps you route to **AudioPipe** are captured and streamed to the Mac.
 
 ## Uninstall
 
-```bat
-pnputil /delete-driver oemXX.inf /uninstall   :: find oemXX via: pnputil /enum-drivers
-bcdedit /set testsigning off                  :: optional, then reboot
+```powershell
+pnputil /enum-drivers                          :: find the oemNN.inf for AudioPipe
+pnputil /delete-driver oemNN.inf /uninstall    :: (elevated)
+bcdedit /set testsigning off                   :: optional; reboot to apply
 ```
 
 ## Incremental path (no driver yet)
 
-You don't need this fork to start testing the sender end-to-end: set
+You don't need this fork to test the pipeline end-to-end: set `sender.json`
 `device_name` to `""` (default output) or install a ready-made virtual cable
-(e.g. VB-CABLE) and capture that. Finish the fork when you want clean per-app
-routing into a device named AudioPipe.
+(e.g. VB-CABLE) and capture that. Build this fork when you want a clean,
+per-app-routable output literally named **AudioPipe**.
+
+## Files here
+
+| File | What |
+|---|---|
+| `apply_rename.ps1` | Rename the cloned driver's speaker endpoint to AudioPipe |
+| `build.ps1` | Build Release/x64 via MSBuild (needs the WDK) |
+| `trust_and_install.ps1` | Trust the test cert + `pnputil` install (elevated) |
+| `upstream/` | The cloned fork (gitignored; created by step 1) |
