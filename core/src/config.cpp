@@ -48,6 +48,7 @@ SenderConfig load_sender_config(const std::string& path) {
     c.channels         = j.value("channels", c.channels);
     c.frame_samples    = j.value("frame_samples", c.frame_samples);
     c.frames_per_packet = j.value("frames_per_packet", c.frames_per_packet);
+    c.device_name      = j.value("device_name", std::string{});
     c.log_file         = j.value("log_file", std::string{});
 
     validate_frame_samples(c.frame_samples);

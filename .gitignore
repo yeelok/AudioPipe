@@ -14,3 +14,6 @@ cmake-build-*/
 
 # Runtime artifacts
 *.log
+
+# Windows driver: upstream clone (fork via driver-win/README.md)
+/driver-win/upstream/

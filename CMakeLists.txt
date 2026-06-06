@@ -37,10 +37,12 @@ add_subdirectory(tools)
 # macOS receiver process (built only on Apple platforms).
 add_subdirectory(receiver)
 
-# Windows half arrives in M4:
-#   sender/ (WASAPI loopback + UDP)   driver-win/ (Virtual-Audio-Driver fork)
-# The macOS driver (driver-mac/, BlackHole fork) builds via its own
-# driver-mac/build_driver.sh (Xcode), not CMake.
+# Windows sender (built only on Windows).
+add_subdirectory(sender)
+
+# The driver forks build via their own native toolchains, not CMake:
+#   driver-mac/ (BlackHole fork)            -> driver-mac/build_driver.sh (Xcode)
+#   driver-win/ (Virtual-Audio-Driver fork) -> WDK/Visual Studio, see driver-win/README.md
 
 # --- Tests -----------------------------------------------------------------
 if(AUDIOPIPE_BUILD_TESTS)

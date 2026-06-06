@@ -15,6 +15,8 @@ struct SenderConfig {
     std::uint16_t channels          = kChannels;
     std::uint16_t frame_samples     = kDefaultFrameSamples;
     std::uint16_t frames_per_packet = 1;         // spec §7 (start at 1)
+    std::string   device_name;                   // render device to loopback-capture
+                                                 // (empty = default; "AudioPipe" = virtual)
     std::string   log_file;
 };
 

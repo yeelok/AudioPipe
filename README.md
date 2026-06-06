@@ -86,11 +86,24 @@ scripts/mac_e2e.sh song.wav
 The receiver and `udp_send` (a real-time §7 sender that stands in for the Windows half) build
 with the rest via CMake. See [driver-mac/README.md](driver-mac/README.md) for signing notes.
 
+## Windows sender + device (M4)
+
+The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS):
+
+- **`sender/`** — WASAPI shared-mode loopback capture → §7 packets → UDP, reusing `core/`.
+  Runs as a Windows Service (§5.6) or `--console`. See [sender/README.md](sender/README.md).
+- **`driver-win/`** — fork of [Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver)
+  (Sysvad-based) as the virtual **output** device named "AudioPipe". Built with the WDK +
+  test-signing. See [driver-win/README.md](driver-win/README.md).
+
+The sender can capture the default output (or any virtual cable) for incremental testing
+before the driver fork is finished — set `device_name` accordingly in `config/sender.json`.
+
 ## Status
 
-**M3 — macOS receiver + BlackHole fork.** Forked BlackHole into the **AudioPipe** device
-(ad-hoc signed, builds via `driver-mac/build_driver.sh`). Implemented the separate receiver
-process (UDP → jitter → drift → ring → CoreAudio HAL output unit) and a real-time `udp_send`
-test sender. Core + receiver build clean; 25 unit tests green. **Pending a user step:** install
-the driver (sudo) and run `scripts/mac_e2e.sh` to confirm audio is audible/selectable in a
-third-party app. Next is **M4** — the Windows sender + driver fork.
+**M4 — Windows sender + driver fork (code complete; build/test on Windows).** Wrote the WASAPI
+loopback sender (capture → packetize → UDP), the Windows Service wrapper, and the
+Virtual-Audio-Driver fork guide. `core` now finds libsoxr cross-platform (pkg-config or
+vcpkg). The sender is **build-blind from this macOS session** — compile and test it on the
+Windows PC. macOS side unaffected: 25 unit tests green. Next is **M5** — real end-to-end over
+the LAN + latency tuning (needs both machines).

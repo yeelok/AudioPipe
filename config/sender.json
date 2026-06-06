@@ -5,5 +5,6 @@
   "channels": 2,
   "frame_samples": 96,
   "frames_per_packet": 1,
+  "device_name": "AudioPipe",
   "log_file": "audiopipe-sender.log"
 }

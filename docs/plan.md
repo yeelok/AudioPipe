@@ -103,12 +103,18 @@ Most risk dies here, before any driver work.
   Ad-hoc-signed HAL plug-in loading on Apple Silicon may need a Developer ID — see
   driver-mac/README.md.
 
-### M4 — Windows sender + driver fork (Windows)
-- Fork the chosen driver, build with WDK, enable test-signing, load, confirm it's a
-  per-app-routable output.
-- Sender: WASAPI **loopback capture** in shared mode on the virtual device → core
-  packetizer → `sendto`. Develop capture against a normal device first, then point at the fork.
-- **Acceptance:** a single app routed to the virtual device; its audio captured and sent.
+### M4 — Windows sender + driver fork (Windows)  ◐ code complete (build/test on Windows)
+- **Sender** (`sender/`, build-blind from macOS): `WasapiLoopbackCapture` (shared-mode
+  loopback, float32), `UdpSender` (Winsock, best-effort per §5.7), `run_sender` loop
+  (capture → §7 packetize → send, device/network reconnect), `main` (console + SCM dispatch),
+  `service.cpp` (Windows Service, §5.6). Reuses `core` packet/config/log. ✅ written
+- **Driver** (`driver-win/`): documented fork of Virtual-Audio-Driver (clone upstream, rename
+  endpoint to "AudioPipe", WDK build, test-signing, pnputil install). Not vendored (WDK build
+  is Windows-only). ✅ documented
+- `core` libsoxr discovery made cross-platform (pkg-config → find_library/vcpkg fallback).
+- **Acceptance (pending Windows build):** route one app to the AudioPipe output, run the
+  sender, confirm capture+send. Sender can target the default device / a virtual cable first.
+  Code compiles only under MSVC — verify on the Windows PC. macOS unaffected (25 tests green).
 
 ### M5 — Real end-to-end over LAN
 - Connect M3 + M4. Reconnection / no-crash on brief network loss (§5.7).
