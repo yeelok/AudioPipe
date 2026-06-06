@@ -56,21 +56,40 @@ Route a specific app's audio to the virtual device in **Settings → System →
 Sound → Volume mixer** (per-app output device = AudioPipe), start the Mac
 receiver, and you should hear it on the Mac.
 
-## Install as a service (§5.6)
+## Install as a service (§5.6, §10 auto-restart)
 
-The service reads `config\sender.json` from **its own folder**, so place the exe
-and a `config\` subfolder together (e.g. `C:\AudioPipe\`).
+A Windows service runs with a **clean environment and no user PATH**, so
+`soxr.dll` (pulled in by `core`) must sit **next to the exe** — a bare
+`sc create` against the build output would start and then fail to load it. The
+service also reads `config\sender.json` from **its own folder**. The install
+script handles both: it copies the exe, `soxr.dll`, and config into an install
+dir, registers an auto-start service, and configures crash auto-restart.
 
-```bat
-sc create AudioPipeSender binPath= "C:\AudioPipe\audiopipe_sender.exe" start= auto
+From an **elevated** PowerShell:
+
+```powershell
+.\scripts\install_sender_service.ps1            # deploy to C:\AudioPipe + register
+# edit C:\AudioPipe\config\sender.json -> set dest_ip to the Mac, then:
 sc start AudioPipeSender
-:: ... later ...
-sc stop AudioPipeSender
-sc delete AudioPipeSender
 ```
 
-(The space after `binPath=` is required by `sc`.) Logs go to the `log_file`
-path in the config. The service auto-starts at boot without user login.
+The service is `start= auto` (boot, no login) and is configured via
+`sc failure` to restart 5 s after a crash, up to 3 times/day (§10). Logs go to
+the `log_file` path in the config. To remove it:
+
+```powershell
+.\scripts\uninstall_sender_service.ps1 -Purge   # stop, delete, remove C:\AudioPipe
+```
+
+> Requires the **VC++ x64 runtime** (`MSVCP140`/`VCRUNTIME140*`) on the machine —
+> already present wherever Visual Studio is installed; otherwise install the
+> Microsoft Visual C++ Redistributable (x64). The UCRT ships with Windows 10.
+
+Manual equivalent (if you prefer raw `sc`): copy `audiopipe_sender.exe` +
+`soxr.dll` + a `config\sender.json` into `C:\AudioPipe\`, then
+`sc create AudioPipeSender binPath= "C:\AudioPipe\audiopipe_sender.exe" start= auto`
+(the space after `binPath=` is required), and
+`sc failure AudioPipeSender reset= 86400 actions= restart/5000/restart/5000/restart/5000`.
 
 ## Notes / limitations (v1)
 

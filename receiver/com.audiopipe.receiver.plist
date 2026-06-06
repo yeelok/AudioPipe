@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AudioPipe receiver launchd job (spec §6.4). This is a TEMPLATE: the
+  install_launchd.sh script substitutes the __PLACEHOLDERS__ with absolute paths
+  and installs it as a per-user LaunchAgent (default, reliable CoreAudio access)
+  or a system LaunchDaemon (boot/no-login). Do not load this file as-is.
+
+  KeepAlive + RunAtLoad => starts at load/login/boot and auto-restarts if it dies
+  (§6.4 / §10). ProcessType Interactive keeps launchd from throttling the audio
+  process.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.audiopipe.receiver</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BIN__</string>
+        <string>--config</string>
+        <string>__CONFIG__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>WorkingDirectory</key>
+    <string>__WORKDIR__</string>
+
+    <key>StandardOutPath</key>
+    <string>__STDOUT__</string>
+    <key>StandardErrorPath</key>
+    <string>__STDERR__</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
