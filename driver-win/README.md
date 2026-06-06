@@ -52,7 +52,20 @@ Pass `-DeviceName "Something Else"` if you want a different name; just keep
 Finds MSBuild via `vswhere` and builds the solution. Output:
 `upstream\x64\Release\package\` → `VirtualAudioDriver.sys`, `VirtualAudioDriver.inf`,
 `virtualaudiodriver.cat`. A Release build **test-signs** the `.sys` and
-generates+signs the `.cat` with an auto-created WDK test certificate.
+generates+signs the `.cat` with an auto-created WDK test certificate
+(`WDKTestCert <user>`).
+
+`build.ps1` makes two adjustments so this builds on a normal dev box:
+
+- It writes `upstream\Directory.Build.props` pinning the INF **DriverVer date**
+  (default `01/01/2025`). StampInf uses the *local* date but `inf2cat` validates
+  against *UTC*, so a machine ahead of UTC otherwise stamps "tomorrow" and the
+  catalog build fails with *"postdated DriverVer not allowed"*.
+- It passes `/p:SkipPackageVerification=true /p:ApiValidator_Enable=false` to skip
+  the WDK's **universal-driver validators** (InfVerif / ApiValidator). These are
+  compliance checks for Store/universal drivers, not needed for a locally
+  test-signed personal driver — and they're broken/missing in some preview WDKs
+  (e.g. `Unable to load DLL 'x86\InfVerif.dll'`, or `ApiValidator` exit 193).
 
 ## 3. Enable test-signing, then trust + install
 
