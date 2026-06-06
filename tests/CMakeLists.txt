@@ -6,6 +6,7 @@ add_executable(core_tests
     test_packet.cpp
     test_ring_buffer.cpp
     test_jitter_buffer.cpp
+    test_drift.cpp
 )
 
 target_link_libraries(core_tests

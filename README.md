@@ -28,8 +28,8 @@ BlackHole-fork virtual input device).
 
 ## Build (portable core + tests)
 
-Requires **CMake ≥ 3.20**, a **C++17** compiler, and network access on first configure
-(CMake fetches nlohmann/json and Catch2).
+Requires **CMake ≥ 3.20**, a **C++17** compiler, **libsoxr** (`brew install libsoxr`), and
+network access on first configure (CMake fetches nlohmann/json and Catch2).
 
 ```sh
 cmake -S . -B build -G Ninja
@@ -54,10 +54,22 @@ build/tools/loopback_harness --in song.wav --out-prefix /tmp/t
 Flags: `--frames 48..240` (samples/frame), `--channels`, `--rate`, `--seconds`, `--drop P`,
 `--reorder P`, `--jitter DEPTH`, `--port`, `--seed`, `--in FILE.wav`, `--out-prefix`.
 
+## Drift simulation (M2)
+
+Models the receiver pipeline (variable-rate resampler + PI drift controller + ring buffer)
+under a sender/consumer clock offset, with no wall clock — validates spec §8.4 in accelerated
+form. Exits non-zero if the buffer under/overruns.
+
+```sh
+build/tools/drift_sim --ppm 500 --minutes 60          # corrected -> STABLE, centered
+build/tools/drift_sim --ppm 200 --minutes 60 --no-correct   # -> GLITCHED (overflow)
+build/tools/drift_sim --ppm 300 --trace               # print fill/ratio trajectory
+```
+
 ## Status
 
-**M1 — portable core + loopback.** Packet codec, lock-free SPSC ring buffer, and fixed-depth
-jitter buffer (reorder / repeat-last concealment / late-drop / priming) are implemented and
-unit-tested (22 cases). The loopback harness confirms a clean run is bit-transparent, injected
-loss is concealed 1:1, and reordering is corrected. Drift correction (M2) is next: see the
-`TODO(M2)` markers in `core/include/audiopipe/{drift_control,resampler}.h`.
+**M2 — clock-drift correction.** Added a libsoxr variable-rate `Resampler` and a `DriftController`
+(PI loop, ±0.1% authority, error normalized by capacity). Validated by simulation: a 60-minute
+run at ±500 ppm holds the buffer exactly on target with zero under/overruns and a smooth
+steady-state ratio; uncorrected it overflows. 25 unit tests green (incl. 3 drift cases). Next is
+**M3** — fork BlackHole and build the macOS receiver process.

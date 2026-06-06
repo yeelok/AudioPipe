@@ -17,14 +17,15 @@ public:
     Resampler(const Resampler&)            = delete;
     Resampler& operator=(const Resampler&) = delete;
 
-    // Consume `in_frames` of interleaved input, apply `ratio`, and emit up to
-    // `out_cap` frames into `out`. Returns the number of output frames produced.
+    // Consume `in_frames` of interleaved input and apply `ratio` (desired
+    // output/input sample-rate ratio, ≈1.0). Emits up to `out_cap` frames
+    // (samples per channel) into the interleaved buffer `out`, which must hold
+    // `out_cap * channels` floats. Returns the number of output frames produced.
     std::size_t process(const float* in, std::size_t in_frames,
                         float* out, std::size_t out_cap, double ratio);
 
 private:
-    void* soxr_ = nullptr; // soxr_t (opaque until M2)
-    int   channels_;
+    void* soxr_ = nullptr; // soxr_t handle (channel count is held inside soxr)
 };
 
 } // namespace audiopipe

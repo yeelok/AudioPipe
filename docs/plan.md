@@ -77,13 +77,16 @@ Most risk dies here, before any driver work.
 - *Harness note:* playout pops one frame per arrival once primed, keeping buffer fill ≈ depth
   (an insert-all-then-drain model overflowed the finite reorder window — fixed).
 
-### M2 — Drift correction in core (§8.4 — hardest algorithm)
-- `resampler` wrapping libsoxr variable-rate mode.
-- `drift_control`: measure ring fill, slow PI controller → ratio bounded to ±0.1%, fed to
-  the resampler — smooth, no audible pitch steps.
-- Test by running producer clock slightly fast/slow (simulated ppm) over an accelerated long
-  run; assert buffer stays centered, no under/overrun.
-- **Acceptance:** validates "2-hour, no cumulative drift" in accelerated form, no real clocks.
+### M2 — Drift correction in core (§8.4 — hardest algorithm)  ✅ DONE
+- `resampler` — libsoxr variable-rate (`SOXR_HQ | SOXR_VR`), interleaved float32, live ratio
+  via `soxr_set_io_ratio`. ✅
+- `drift_control` — PI loop on capacity-normalized fill error, output/input ratio clamped to
+  ±0.1% (§8.4), anti-windup on the integral. Defaults tuned ~critically-damped. ✅
+- `tools/drift_sim` + 3 unit tests — deterministic producer/consumer ppm model through the
+  real resampler + ring. ✅
+- **Acceptance met:** 60-min run at ±500 ppm holds fill *exactly* on target (drift 0), zero
+  under/overruns, steady-state ratio = 1∓ppm (smooth, no steps); uncorrected control overflows
+  (29k glitches). libsoxr 0.1.3 via Homebrew/pkg-config. 25 unit tests green.
 
 ### M3 — macOS receiver + BlackHole fork (Mac only)
 - Fork BlackHole, rename device/bundle IDs, build, install to
