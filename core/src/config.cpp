@@ -63,6 +63,7 @@ ReceiverConfig load_receiver_config(const std::string& path) {
     c.sample_rate   = j.value("sample_rate", c.sample_rate);
     c.channels      = j.value("channels", c.channels);
     c.jitter_frames = j.value("jitter_frames", c.jitter_frames);
+    c.device_name   = j.value("device_name", c.device_name);
     c.log_file      = j.value("log_file", std::string{});
     return c;
 }

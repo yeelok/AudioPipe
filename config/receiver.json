@@ -3,5 +3,6 @@
   "sample_rate": 48000,
   "channels": 2,
   "jitter_frames": 3,
+  "device_name": "AudioPipe",
   "log_file": "audiopipe-receiver.log"
 }

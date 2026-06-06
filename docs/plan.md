@@ -88,13 +88,20 @@ Most risk dies here, before any driver work.
   under/overruns, steady-state ratio = 1∓ppm (smooth, no steps); uncorrected control overflows
   (29k glitches). libsoxr 0.1.3 via Homebrew/pkg-config. 25 unit tests green.
 
-### M3 — macOS receiver + BlackHole fork (Mac only)
-- Fork BlackHole, rename device/bundle IDs, build, install to
-  `/Library/Audio/Plug-Ins/HAL/`, `killall coreaudiod`, confirm it appears as an input.
-- Separate **receiver process** (per §6.3 — separate process first): UDP recv → core
-  jitter/drift → lock-free ring → write into the BlackHole fork.
-- **Acceptance:** the harness's fake sender drives real audio into the BlackHole device,
-  selectable/audible in QuickTime.
+### M3 — macOS receiver + BlackHole fork (Mac only)  ✅ code complete (install = user step)
+- Forked BlackHole → `driver-mac/` as the **AudioPipe** device; customized via build-time
+  constants (`build_driver.sh`): name AudioPipe, bundle `audio.audiopipe.AudioPipe`, 2ch,
+  48 kHz, ad-hoc signed. Builds to `AudioPipe.driver` (universal). `install.sh` copies to
+  `/Library/Audio/Plug-Ins/HAL/` + restarts coreaudiod. ✅
+- Separate **receiver process** (`receiver/`, §6.3): UDP recv → JitterBuffer → drift-corrected
+  Resampler → SpscRingBuffer → CoreAudio HAL output unit render callback. Device found by name;
+  small IO buffer requested for low latency. ✅
+- `tools/udp_send` — real-time §7 sender (stand-in for the Windows half); `scripts/mac_e2e.sh`
+  orchestrates the local test. ✅
+- **Acceptance (pending user step):** requires `sudo ./install.sh` then `scripts/mac_e2e.sh`
+  to confirm audio is audible/selectable in QuickTime. Code builds clean; 25 unit tests green.
+  Ad-hoc-signed HAL plug-in loading on Apple Silicon may need a Developer ID — see
+  driver-mac/README.md.
 
 ### M4 — Windows sender + driver fork (Windows)
 - Fork the chosen driver, build with WDK, enable test-signing, load, confirm it's a

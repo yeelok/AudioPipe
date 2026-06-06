@@ -34,9 +34,13 @@ add_subdirectory(core)
 # Dev tools (loopback harness; latency probe later). POSIX-only for now.
 add_subdirectory(tools)
 
-# Platform halves and driver forks arrive in later milestones:
-#   sender/     (M4, Windows)   receiver/  (M3, macOS)
-#   driver-win/ (M4)            driver-mac/ (M3)
+# macOS receiver process (built only on Apple platforms).
+add_subdirectory(receiver)
+
+# Windows half arrives in M4:
+#   sender/ (WASAPI loopback + UDP)   driver-win/ (Virtual-Audio-Driver fork)
+# The macOS driver (driver-mac/, BlackHole fork) builds via its own
+# driver-mac/build_driver.sh (Xcode), not CMake.
 
 # --- Tests -----------------------------------------------------------------
 if(AUDIOPIPE_BUILD_TESTS)

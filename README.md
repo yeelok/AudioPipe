@@ -66,10 +66,31 @@ build/tools/drift_sim --ppm 200 --minutes 60 --no-correct   # -> GLITCHED (overf
 build/tools/drift_sim --ppm 300 --trace               # print fill/ratio trajectory
 ```
 
+## macOS device + receiver (M3)
+
+The **AudioPipe** virtual input device is a BlackHole fork in `driver-mac/` (build-time
+customized to AudioPipe / 2ch / 48 kHz). The **receiver** (`receiver/`) listens for UDP,
+runs the core pipeline (jitter buffer → drift-corrected resampler → lock-free ring), and
+plays into that device via a CoreAudio HAL output unit; apps select "AudioPipe" as a mic.
+
+```sh
+# 1. Build + install the device (sudo restarts coreaudiod):
+(cd driver-mac && ./build_driver.sh && sudo ./install.sh)
+
+# 2. End-to-end test on this Mac (sine, or pass a WAV); then select
+#    "AudioPipe" as input in QuickTime / System Settings to hear it:
+scripts/mac_e2e.sh
+scripts/mac_e2e.sh song.wav
+```
+
+The receiver and `udp_send` (a real-time §7 sender that stands in for the Windows half) build
+with the rest via CMake. See [driver-mac/README.md](driver-mac/README.md) for signing notes.
+
 ## Status
 
-**M2 — clock-drift correction.** Added a libsoxr variable-rate `Resampler` and a `DriftController`
-(PI loop, ±0.1% authority, error normalized by capacity). Validated by simulation: a 60-minute
-run at ±500 ppm holds the buffer exactly on target with zero under/overruns and a smooth
-steady-state ratio; uncorrected it overflows. 25 unit tests green (incl. 3 drift cases). Next is
-**M3** — fork BlackHole and build the macOS receiver process.
+**M3 — macOS receiver + BlackHole fork.** Forked BlackHole into the **AudioPipe** device
+(ad-hoc signed, builds via `driver-mac/build_driver.sh`). Implemented the separate receiver
+process (UDP → jitter → drift → ring → CoreAudio HAL output unit) and a real-time `udp_send`
+test sender. Core + receiver build clean; 25 unit tests green. **Pending a user step:** install
+the driver (sudo) and run `scripts/mac_e2e.sh` to confirm audio is audible/selectable in a
+third-party app. Next is **M4** — the Windows sender + driver fork.
