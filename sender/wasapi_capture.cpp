@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <audioclient.h>
+#include <propkeydef.h> // defines DEFINE_PROPERTYKEY (with INITGUID) used by the next header
 #include <functiondiscoverykeys_devpkey.h>
 #include <mmdeviceapi.h>
 #include <mmreg.h>
