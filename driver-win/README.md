@@ -15,8 +15,9 @@ loopback-captures it and streams it to the Mac. So **only audio you route into
 This is a **kernel-mode (WDK) driver**. Building/installing it is heavier than the
 rest of the project: it needs the WDK, **test-signing enabled (a reboot)**, and
 elevation. For personal use that's acceptable (spec §1/§11). The upstream clone
-lives under `upstream/` (gitignored — not vendored); our only change is a one-line
-rename applied by `apply_rename.ps1`, so it stays trivially re-pullable.
+lives under `upstream/` (gitignored — not vendored); our only changes are two
+small patch scripts (`apply_rename.ps1`, `apply_48k.ps1`) applied after cloning,
+so it stays trivially re-pullable.
 
 ## Prerequisites
 
@@ -33,7 +34,8 @@ rename applied by `apply_rename.ps1`, so it stays trivially re-pullable.
 ```powershell
 cd driver-win
 git clone https://github.com/VirtualDrivers/Virtual-Audio-Driver.git upstream
-..\driver-win\apply_rename.ps1        # or: .\apply_rename.ps1
+.\apply_rename.ps1        # rename endpoint to AudioPipe + lower OS floor
+.\apply_48k.ps1           # pin the endpoint to 48 kHz only (see step 1b)
 ```
 
 `apply_rename.ps1` edits `upstream\Source\Main\VirtualAudioDriver.inx` (the INF
@@ -48,6 +50,33 @@ template, UTF-16) and does two things:
    targets Windows 11 only) to `10.0...17763` (Win10 1809+). Without this, on
    Windows 10 PnP reports *"no better matching drivers"* and binds the generic
    null driver instead of ours. Override with `-MinBuild`.
+
+## 1b. Pin the endpoint to 48 kHz (required)
+
+```powershell
+.\apply_48k.ps1
+```
+
+AudioPipe is a fixed **48 kHz / float32** pipeline: the wire protocol carries no
+sample rate, and the macOS receiver plays into a 48 kHz device with only a
+**±0.1 % drift trim — not a sample-rate converter**. If the Windows endpoint's
+shared-mode **mix format** is any other rate, the sender captures at that rate
+and the receiver's playout ring **starves** (rates < 48k) or **overflows**
+(rates > 48k) → continuous dropouts, clicks, and a pitch/speed shift.
+
+Upstream's speaker endpoint advertises **8 kHz – 192 kHz (including 44.1 kHz)**,
+so Windows is free to choose a non-48k mix format (e.g. a machine left at "CD
+quality, 44100 Hz"). `apply_48k.ps1` edits
+`upstream\Source\Filters\speakerwavtable.h` so the speaker advertises **48 kHz
+only** (16/24/32-bit, stereo) — the supported-formats array, the modes array,
+and the KS data range are all narrowed to 48000 Hz. Windows then has exactly one
+rate to pick, the mix format is always 48 kHz, and the whole path stays
+bit-transparent with no resampling. The script is idempotent, backs up the
+original to `speakerwavtable.h.orig`, and throws if upstream's table shape
+changed (so it never silently leaves a non-48k format in).
+
+> You can confirm after install: **Settings → Sound → AudioPipe → Properties →
+> Advanced** should offer only 48000 Hz formats.
 
 ## 2. Build (Release / x64)
 
@@ -139,6 +168,7 @@ per-app-routable output literally named **AudioPipe**.
 | File | What |
 |---|---|
 | `apply_rename.ps1` | Rename the cloned driver's speaker endpoint to AudioPipe |
+| `apply_48k.ps1` | Pin the speaker endpoint to 48 kHz only (formats, modes, data range) |
 | `build.ps1` | Build Release/x64 via MSBuild (needs the WDK) |
 | `trust_and_install.ps1` | Trust the test cert + `pnputil` install (elevated) |
 | `upstream/` | The cloned fork (gitignored; created by step 1) |
