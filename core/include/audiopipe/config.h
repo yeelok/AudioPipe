@@ -25,7 +25,9 @@ struct ReceiverConfig {
     std::uint16_t listen_port    = 0;            // required
     std::uint32_t sample_rate    = kSampleRate;
     std::uint16_t channels       = kChannels;
-    std::uint16_t jitter_frames  = 3;            // spec §8.1 default
+    std::uint16_t latency_ms     = 50;           // AOO sink playout latency (jitter buffer).
+                                                 // ~50 ms is glitch-free out of the box; lower
+                                                 // it toward 5-20 ms on a clean wired LAN.
     std::string   device_name    = "AudioPipe";  // CoreAudio device to play into
     std::string   log_file;
 };

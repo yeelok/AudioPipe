@@ -28,6 +28,27 @@ FetchContent_Declare(nlohmann_json
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+# AOO (Audio over OSC): low-latency send/receive engine — UDP transport, jitter
+# buffer, time-DLL clock sync + dynamic resampling, and packet resend. We use
+# the bare AooSource/AooSink with our own sockets (the AOO_NET client/server
+# discovery layer is disabled). PCM-only (Opus off) keeps the path
+# bit-transparent. Sample type is float32 (AOO_SAMPLE_SIZE=32, the default).
+set(AOO_USE_OPUS            OFF CACHE BOOL "" FORCE)
+set(AOO_NET                 OFF CACHE BOOL "" FORCE)
+set(AOO_BUILD_EXAMPLES      OFF CACHE BOOL "" FORCE)
+set(AOO_BUILD_TESTS         OFF CACHE BOOL "" FORCE)
+set(AOO_BUILD_SERVER        OFF CACHE BOOL "" FORCE)
+set(AOO_BUILD_PD_EXTERNAL   OFF CACHE BOOL "" FORCE)
+set(AOO_BUILD_SC_EXTENSION  OFF CACHE BOOL "" FORCE)
+set(AOO_INSTALL_LIBRARY     OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(aoo
+    GIT_REPOSITORY https://git.iem.at/aoo/aoo.git
+    GIT_TAG        v2.0-pre4
+    GIT_SUBMODULES ""           # skip the opus/portaudio submodules (Opus is off)
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(aoo)
+
 # --- Portable core ---------------------------------------------------------
 add_subdirectory(core)
 

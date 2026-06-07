@@ -1,9 +1,11 @@
 # AudioPipe Windows sender
 
 Captures audio rendered to a virtual output device via **WASAPI shared-mode
-loopback** (spec §5.2), packetizes it (§7), and streams it over UDP to the Mac
-receiver. Reuses the portable `core/` library for the wire format, config, and
-logging. Runs as a **Windows Service** (§5.6) or in the foreground for testing.
+loopback** (spec §5.2) and streams it to the Mac receiver through an **AOO**
+`AooSource` over UDP. AOO owns the wire protocol, timing, and clock-drift
+handling; the source streams at the captured rate and the Mac sink resamples to
+48 kHz, so a non-48 kHz endpoint no longer glitches. Reuses `core/` for config
+and logging. Runs as a **Windows Service** (§5.6) or in the foreground for testing.
 
 > Build and run this on the **Windows PC**. The code is part of the shared CMake
 > project but compiles only under MSVC (it uses WASAPI / Winsock).

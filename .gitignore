@@ -15,5 +15,11 @@ cmake-build-*/
 # Runtime artifacts
 *.log
 
+# Local audio test artifacts (e.g. Dawn.wav and aoo_send/harness outputs)
+*.wav
+
 # Windows driver: upstream clone (fork via driver-win/README.md)
 /driver-win/upstream/
+
+# Session runtime lock
+.claude/scheduled_tasks.lock

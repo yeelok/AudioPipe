@@ -178,3 +178,67 @@ abstraction here. It's also based on the older MSVAD sample and documents no per
 confirm it's a routable shared-mode output). The real sender work — WASAPI loopback capture →
 `/core` packetizer → `sendto` — is ordinary userspace C++ developed against a normal device
 first, then pointed at the fork. This keeps the Windows-specific surface small.
+
+---
+
+## Addendum: migration to the AOO library (post-M7)
+
+The original `/core` carried hand-rolled transport: a §7 packet codec, jitter
+buffer, PI drift controller, and libsoxr resampler. Real-world testing exposed
+the predictable weakness — that pipeline assumed **every** stage ran at exactly
+48 kHz and only had a ±0.1 % drift trim, so a non-48 kHz source (e.g. a Windows
+endpoint left at 44.1 kHz, very common) starved the playout ring and produced
+continuous dropouts ("splitting and noise").
+
+Rather than build a full sample-rate converter + clock-sync layer ourselves, we
+adopted **[AOO](https://git.iem.at/aoo/aoo)** (Audio over OSC) — the engine
+behind SonoBus — via its bare `AooSource`/`AooSink` API (we keep our own UDP
+sockets; AOO's NET/discovery layer is off). AOO provides, in tested form, exactly
+the algorithmically risky pieces we were maintaining:
+
+- UDP wire protocol + jitter buffer (auto-sizing, reorder/loss handling),
+- **time-DLL clock-drift correction** ("Using a DLL to filter time", Adriaensen)
+  with **dynamic resampling** — source and sink may run at different / drifting
+  rates and AOO resamples between them,
+- selective **packet resend** (NACK) for low-RTT LANs.
+
+It's float32 + PCM (Opus disabled), so the path stays bit-transparent, and it's
+Standard Improved BSD (license-compatible). Pulled via CMake `FetchContent`,
+pinned to `v2.0-pre4`, matching how we already fetch nlohmann/json and Catch2.
+
+**Removed:** `core/{packet,jitter_buffer,drift_control,resampler}.{h,cpp}`, the
+libsoxr dependency, and the `loopback_harness`/`drift_sim`/`udp_send` tools (their
+roles are now AOO's; the in-process `tests/test_aoo_loopback.cpp` + the on-device
+`aoo_send` e2e cover them). **Kept:** config, logging, format constants.
+
+**Result:** on-Mac e2e is glitch-free (0 over/underruns) at `latency_ms=50` for
+both 48 kHz and 44.1 kHz sources — the 44.1 kHz case that used to starve now
+plays.
+
+### Latency: why the on-Mac test needs ~50 ms (measured — it's jitter, not drift)
+
+The receiver logs the jitter-buffer **fill ratio** (0=empty, 1=full) and the
+DLL's **measured device rate** every ~5 s. An idle low-latency sweep pinned the
+cause:
+
+| `latency_ms` | over/underruns (12 s) | fill swing | measured rate |
+|---|---|---|---|
+| 10 / 15 / 20 | ~138 / 0 | **0.04 .. 1.00** (hits the overrun edge) | **48000.0 Hz** |
+| 50 | **0 / 0** | **0.42 .. 0.44** (tight, centered) | 48000.0 Hz |
+
+The measured rate is **dead-on 48000 Hz at every latency**, so there is *no*
+clock drift or rate surplus. The over/underruns are purely **arrival-timing
+jitter**: `tools/aoo_send` paces blocks with `sleep_until`, which macOS timer-
+coalesces into bursts, so packets arrive in clumps that swing the buffer across
+its whole range. Only a ~50 ms buffer is deep enough not to overflow on a burst
+(then the DLL settles the fill into a tight 0.42–0.44 band). Running the machine
+idle didn't help, so the jitter is the software pacing itself, not CPU contention.
+
+**Open follow-up — the ≤20 ms target (§9).** This jitter is a property of the
+*test sender*, not AOO or the real link. The production Windows sender is clocked
+by the WASAPI capture interrupt (regular, hardware-timed), runs on a separate
+machine from the receiver, and the LAN adds only bounded jitter — exactly the
+regime AOO's "5–20 ms on local networks" guidance targets. Low-latency tuning
+toward ≤20 ms should therefore be validated on the real wired Windows→Mac link;
+en route, `tools/aoo_send` could be made burst-free (busy-wait pacing or a
+real-time thread) to serve as a fairer on-Mac proxy.

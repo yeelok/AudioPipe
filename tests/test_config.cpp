@@ -55,7 +55,7 @@ TEST_CASE("receiver config: defaults applied for omitted fields", "[config]") {
     const auto path = write_temp("receiver_test.json", R"({ "listen_port": 4010 })");
     const auto c = load_receiver_config(path);
     CHECK(c.listen_port == 4010);
-    CHECK(c.jitter_frames == 3);
+    CHECK(c.latency_ms == 50);
     CHECK(c.sample_rate == kSampleRate);
     CHECK(c.channels == kChannels);
     std::remove(path.c_str());

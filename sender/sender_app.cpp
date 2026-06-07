@@ -1,119 +1,185 @@
 #include "sender_app.h"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "aoo.h"
+#include "aoo_source.hpp"
+#include "codec/aoo_pcm.h"
+
 #include "audiopipe/format.h"
-#include "audiopipe/packet.h"
-#include "udp_sender.h"
 #include "wasapi_capture.h"
+
+// NOTE: This file is built only on Windows (see sender/CMakeLists.txt) and is
+// not compiled by the macOS CI on this machine. It mirrors the AOO usage that
+// the receiver and tools/aoo_send.cpp were validated with on macOS.
 
 namespace audiopipe {
 namespace win {
 
+namespace {
+
+constexpr AooId kSourceId = 1;
+constexpr AooId kSinkId   = 1;
+
+Logger* g_log = nullptr;
+
+// AOO -> UDP. AOO supplies the destination address (the sink we added).
+AooInt32 AOO_CALL udp_send(void* user, const AooByte* data, AooInt32 size,
+                           const void* address, AooAddrSize addrlen, AooFlag) {
+    SOCKET s = *static_cast<SOCKET*>(user);
+    return AooInt32(::sendto(s, reinterpret_cast<const char*>(data), int(size), 0,
+                             static_cast<const sockaddr*>(address), int(addrlen)));
+}
+
+void AOO_CALL on_event(void*, const AooEvent* e, AooThreadLevel) {
+    if (!g_log) return;
+    switch (e->type) {
+    case kAooEventSinkAdd:        g_log->info("aoo: sink added"); break;
+    case kAooEventSinkRemove:     g_log->info("aoo: sink removed"); break;
+    case kAooEventBufferOverrun:  g_log->info("aoo: sink buffer overrun"); break;
+    case kAooEventBufferUnderrun: g_log->info("aoo: sink buffer underrun"); break;
+    default: break;
+    }
+}
+
+} // namespace
+
 int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
-    UdpSender   net;
-    std::string err;
-    if (!net.open(cfg.dest_ip, cfg.dest_port, err)) {
-        log.info("sender: net open failed: " + err);
+    g_log = &log;
+    if (aoo_initialize(nullptr) != kAooOk) {
+        log.info("sender: aoo_initialize failed");
         return 1;
     }
 
-    // Samples-per-channel carried in each packet (one or more frames; §7).
-    const std::uint16_t fpp = cfg.frames_per_packet ? cfg.frames_per_packet : 1;
-    const std::uint16_t packet_spc = static_cast<std::uint16_t>(cfg.frame_samples * fpp);
+    // --- UDP socket + destination endpoint -------------------------------
+    SOCKET s = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) {
+        log.info("sender: socket() failed");
+        aoo_terminate();
+        return 1;
+    }
+    DWORD rcv_to = 5; // ms; keep the net thread responsive to resend requests
+    ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&rcv_to), sizeof(rcv_to));
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    dst.sin_port   = htons(cfg.dest_port);
+    if (::inet_pton(AF_INET, cfg.dest_ip.c_str(), &dst.sin_addr) != 1) {
+        log.info("sender: bad dest_ip '" + cfg.dest_ip + "'");
+        ::closesocket(s);
+        aoo_terminate();
+        return 1;
+    }
 
-    WasapiLoopbackCapture cap;
-    bool                  opened = false;
-    std::vector<float>    accum;
-    std::vector<std::uint8_t> datagram;
-    std::uint16_t         seq = 0;
-    std::uint64_t         ts  = 0;
-    std::uint64_t         sent = 0;
-    std::uint64_t         last_log_sent = 0;
-
-    // Heartbeat cadence: ~ every 30 s of audio, in packets. Independent of any
-    // wall clock so a quiet source (no packets) simply produces no heartbeat.
-    const std::uint64_t hb_packets =
-        cfg.frame_samples ? (30u * cfg.sample_rate) / cfg.frame_samples : 15000u;
-
+    // --- Open WASAPI capture (retry until available or stopped) -----------
     const std::string dev_label =
         cfg.device_name.empty() ? std::string("default render device") : cfg.device_name;
+    WasapiLoopbackCapture cap;
+    std::string           err;
+    while (!stop.load(std::memory_order_acquire)) {
+        if (cap.open(cfg.device_name, err)) break;
+        log.info("sender: capture open failed (" + err + "); retrying in 1s");
+        Sleep(1000);
+    }
+    if (stop.load(std::memory_order_acquire)) {
+        ::closesocket(s);
+        aoo_terminate();
+        return 0;
+    }
+
+    const std::uint16_t ch    = cap.channels();
+    const std::uint32_t rate  = cap.sample_rate();
+    const int           block = cfg.frame_samples ? cfg.frame_samples : kDefaultFrameSamples;
+    log.info("sender: capturing '" + dev_label + "' at " + std::to_string(rate) + " Hz, " +
+             std::to_string(ch) + "ch (AOO streams at this rate; the Mac sink resamples to " +
+             std::to_string(cfg.sample_rate) + ")");
+
+    // --- AOO source -------------------------------------------------------
+    AooSource::Ptr source = AooSource::create(kSourceId);
+    source->setEventHandler(on_event, nullptr, kAooEventModePoll);
+    source->setup(ch, AooSampleRate(rate), block, 0);
+    AooFormatPcm fmt;
+    AooFormatPcm_init(&fmt, ch, AooSampleRate(rate), block, kAooPcmFloat32);
+    source->setFormat(fmt.header);
+    source->setResendBufferSize(0.05);        // honor sink resend requests
+    source->setDynamicResampling(kAooTrue);    // measure the WASAPI capture clock
+    AooEndpoint ep{ &dst, sizeof(dst), kSinkId };
+    source->addSink(ep, kAooTrue);
+
+    // --- Network thread: flush packets + handle resend requests -----------
+    std::atomic<bool> net_stop{false};
+    std::thread net([&] {
+        std::vector<AooByte> buf(AOO_MAX_PACKET_SIZE);
+        while (!net_stop.load(std::memory_order_acquire)) {
+            source->send(udp_send, &s);
+            sockaddr_storage from{};
+            int              fromlen = sizeof(from);
+            const int n = ::recvfrom(s, reinterpret_cast<char*>(buf.data()), int(buf.size()), 0,
+                                     reinterpret_cast<sockaddr*>(&from), &fromlen);
+            if (n > 0) {
+                source->handleMessage(buf.data(), AooInt32(n), &from, AooAddrSize(fromlen));
+            }
+            source->pollEvents();
+        }
+    });
+
+    source->startStream(0, nullptr);
+
+    // --- Capture -> process loop (audio thread) ---------------------------
+    std::vector<float>              accum;   // interleaved float32 from WASAPI
+    std::vector<std::vector<float>> planar(ch, std::vector<float>(block, 0.0f));
+    std::vector<AooSample*>         ptrs(ch);
+    const std::size_t               block_floats = std::size_t(block) * ch;
+
+    std::uint64_t processed = 0, last_hb = 0;
+    const std::uint64_t hb_blocks = rate ? (30u * rate) / std::uint32_t(block) : 15000u;
 
     while (!stop.load(std::memory_order_acquire)) {
-        if (!opened) {
-            if (cap.open(cfg.device_name, err)) {
-                opened = true;
-                log.info("sender: capturing '" + dev_label + "' at " +
-                         std::to_string(cap.sample_rate()) + " Hz, " +
-                         std::to_string(cap.channels()) + "ch");
-                if (cap.sample_rate() != cfg.sample_rate) {
-                    log.info("sender: WARNING device rate " + std::to_string(cap.sample_rate()) +
-                             " != config sample_rate " + std::to_string(cfg.sample_rate));
-                }
-            } else {
-                log.info("sender: capture open failed (" + err + "); retrying in 1s");
-                Sleep(1000);
-                continue;
-            }
-        }
-
         bool silent = false;
         if (!cap.capture(accum, silent, err)) {
-            log.info("sender: capture error (" + err + "); reopening");
-            cap.close();
-            opened = false;
-            Sleep(500);
-            continue;
+            log.info("sender: capture error (" + err + "); stopping (service will restart)");
+            break;
         }
-
-        const std::uint16_t ch            = cap.channels();
-        const std::size_t   packet_floats = std::size_t(packet_spc) * ch;
-        const std::size_t   need          = packet_size(packet_floats);
-        if (datagram.size() < need) {
-            datagram.resize(need);
-        }
-
         std::size_t consumed = 0;
-        while (accum.size() - consumed >= packet_floats) {
-            PacketHeader h{};
-            h.magic       = kMagic;
-            h.sequence    = seq++;
-            h.timestamp   = ts;
-            h.frame_count = packet_spc;
-            h.channels    = static_cast<std::uint8_t>(ch);
-            h.format_id   = static_cast<std::uint8_t>(FormatId::Float32);
-            ts += packet_spc;
-
-            encode(h, &accum[consumed], packet_floats, datagram.data(), datagram.size());
-            net.send(datagram.data(), need);
-            consumed += packet_floats;
-            ++sent;
+        while (accum.size() - consumed >= block_floats) {
+            for (int i = 0; i < block; ++i) {
+                for (std::uint16_t c = 0; c < ch; ++c) {
+                    planar[c][i] = accum[consumed + std::size_t(i) * ch + c];
+                }
+            }
+            for (std::uint16_t c = 0; c < ch; ++c) ptrs[c] = planar[c].data();
+            source->process(ptrs.data(), block, aoo_getCurrentNtpTime());
+            consumed += block_floats;
+            ++processed;
         }
         if (consumed > 0) {
             accum.erase(accum.begin(), accum.begin() + consumed);
         }
-
-        // Operational heartbeat (spec §10): periodic proof of life + throughput.
-        if (sent - last_log_sent >= hb_packets) {
-            log.info("sender: heartbeat packets_sent=" + std::to_string(sent) +
+        if (processed - last_hb >= hb_blocks) {
+            log.info("sender: heartbeat blocks_sent=" + std::to_string(processed) +
                      (silent ? " (source silent)" : ""));
-            last_log_sent = sent;
+            last_hb = processed;
         }
-
-        // Light poll: capture() returns immediately, so sleep ~half a frame to
-        // avoid a busy spin while still keeping latency low.
-        const DWORD half_frame_ms =
-            static_cast<DWORD>((1000.0 * cfg.frame_samples) / (2.0 * cfg.sample_rate));
-        Sleep(half_frame_ms > 0 ? half_frame_ms : 1);
+        const DWORD half_block_ms = static_cast<DWORD>((1000.0 * block) / (2.0 * rate));
+        Sleep(half_block_ms > 0 ? half_block_ms : 1);
     }
 
+    // --- Teardown ---------------------------------------------------------
+    source->stopStream(0);
+    Sleep(50);                                   // let the net thread flush /stop
+    net_stop.store(true, std::memory_order_release);
+    if (net.joinable()) net.join();
     cap.close();
-    net.close();
-    log.info("sender: stopped, packets sent=" + std::to_string(sent));
+    source.reset();
+    ::closesocket(s);
+    aoo_terminate();
+    log.info("sender: stopped, blocks sent=" + std::to_string(processed));
     return 0;
 }
 
