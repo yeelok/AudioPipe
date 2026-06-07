@@ -213,7 +213,11 @@ roles are now AOO's; the in-process `tests/test_aoo_loopback.cpp` + the on-devic
 
 **Result:** on-Mac e2e is glitch-free (0 over/underruns) at `latency_ms=50` for
 both 48 kHz and 44.1 kHz sources — the 44.1 kHz case that used to starve now
-plays.
+plays. A **20-minute on-Mac soak** (looping audio at 50 ms) held **0 over/
+underruns** end to end, with the measured device rate steady at **48000.0 Hz**
+across all 501 heartbeats and the buffer fill centered (~0.43, swing ≤ 0.05)
+from start to finish — no drift, no creep. The formal §8 **two-hour** acceptance
+is best run on the real wired Windows→Mac link.
 
 ### Latency: why the on-Mac test needs ~50 ms (measured — it's jitter, not drift)
 
