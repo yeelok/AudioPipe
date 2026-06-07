@@ -2,7 +2,7 @@
   "listen_port": 4010,
   "sample_rate": 48000,
   "channels": 2,
-  "jitter_frames": 3,
+  "latency_ms": 50,
   "device_name": "AudioPipe",
   "log_file": "audiopipe-receiver.log"
 }

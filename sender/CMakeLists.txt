@@ -1,4 +1,4 @@
-# Windows sender: WASAPI loopback capture -> §7 packets -> UDP. Windows only.
+# Windows sender: WASAPI loopback capture -> AooSource -> UDP. Windows only.
 if(NOT WIN32)
     return()
 endif()
@@ -8,11 +8,11 @@ add_executable(audiopipe_sender
     service.cpp
     sender_app.cpp
     wasapi_capture.cpp
-    udp_sender.cpp
 )
 
 target_link_libraries(audiopipe_sender PRIVATE
     audiopipe_core
+    Aoo::aoo
     ole32        # COM (MMDeviceEnumerator)
     propsys      # PropVariantClear
     ws2_32       # Winsock

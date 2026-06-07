@@ -15,8 +15,9 @@ loopback-captures it and streams it to the Mac. So **only audio you route into
 This is a **kernel-mode (WDK) driver**. Building/installing it is heavier than the
 rest of the project: it needs the WDK, **test-signing enabled (a reboot)**, and
 elevation. For personal use that's acceptable (spec §1/§11). The upstream clone
-lives under `upstream/` (gitignored — not vendored); our only change is a one-line
-rename applied by `apply_rename.ps1`, so it stays trivially re-pullable.
+lives under `upstream/` (gitignored — not vendored); our only changes are two
+small patch scripts (`apply_rename.ps1`, `apply_48k.ps1`) applied after cloning,
+so it stays trivially re-pullable.
 
 ## Prerequisites
 
@@ -33,7 +34,8 @@ rename applied by `apply_rename.ps1`, so it stays trivially re-pullable.
 ```powershell
 cd driver-win
 git clone https://github.com/VirtualDrivers/Virtual-Audio-Driver.git upstream
-..\driver-win\apply_rename.ps1        # or: .\apply_rename.ps1
+.\apply_rename.ps1        # rename endpoint to AudioPipe + lower OS floor
+.\apply_48k.ps1           # pin the endpoint to 48 kHz only (see step 1b)
 ```
 
 `apply_rename.ps1` edits `upstream\Source\Main\VirtualAudioDriver.inx` (the INF
@@ -48,6 +50,39 @@ template, UTF-16) and does two things:
    targets Windows 11 only) to `10.0...17763` (Win10 1809+). Without this, on
    Windows 10 PnP reports *"no better matching drivers"* and binds the generic
    null driver instead of ours. Override with `-MinBuild`.
+
+## 1b. Pin the endpoint to 48 kHz (recommended)
+
+```powershell
+.\apply_48k.ps1
+```
+
+> **Not required** since the macOS receiver moved to the AOO library: the
+> `AooSink` resamples whatever rate the sender streams to the 48 kHz device, so a
+> non-48 kHz endpoint no longer starves it (that earlier dropout bug is gone).
+> You can skip this step and the link still works — handy during bring-up.
+
+Pinning to 48 kHz is still **recommended** for the best path:
+
+- **Bit-transparency** — at 48 kHz, source and device rates match and AOO does
+  *zero* resampling (bit-exact, per spec §4). Unpinned at 44.1 kHz, AOO resamples
+  44.1 → 48 kHz: high quality, but no longer bit-exact.
+- **No double resample** — unpinned at 44.1 kHz the audio is resampled twice
+  (Windows' shared mixer takes each app → 44.1 kHz, then AOO 44.1 kHz → 48 kHz).
+  Pinning removes the second hop.
+- **Bandwidth** — upstream advertises up to **192 kHz**; unpinned, Windows could
+  pick 96/192 kHz as the mix format → 2–4× the UDP bandwidth for no benefit.
+
+Upstream's speaker endpoint advertises **8 kHz – 192 kHz (including 44.1 kHz)**.
+`apply_48k.ps1` edits `upstream\Source\Filters\speakerwavtable.h` so the speaker
+advertises **48 kHz only** (16/24/32-bit, stereo) — the supported-formats array,
+the modes array, and the KS data range are all narrowed to 48000 Hz, so Windows
+has exactly one rate to pick. The script is idempotent, backs up the original to
+`speakerwavtable.h.orig`, and throws if upstream's table shape changed (so it
+never silently leaves a non-48k format in).
+
+> You can confirm after install: **Settings → Sound → AudioPipe → Properties →
+> Advanced** should offer only 48000 Hz formats.
 
 ## 2. Build (Release / x64)
 
@@ -139,6 +174,7 @@ per-app-routable output literally named **AudioPipe**.
 | File | What |
 |---|---|
 | `apply_rename.ps1` | Rename the cloned driver's speaker endpoint to AudioPipe |
+| `apply_48k.ps1` | Pin the speaker endpoint to 48 kHz only (formats, modes, data range) |
 | `build.ps1` | Build Release/x64 via MSBuild (needs the WDK) |
 | `trust_and_install.ps1` | Trust the test cert + `pnputil` install (elevated) |
 | `upstream/` | The cloned fork (gitignored; created by step 1) |

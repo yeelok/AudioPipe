@@ -8,28 +8,39 @@ Low-latency, bit-transparent audio link: **Windows PC → macOS** over a local n
 
 ## Architecture
 
-A portable C++ **`core/`** library holds all the bug-prone logic (wire format, jitter buffer,
-lock-free ring, drift control) and is unit-tested on either OS. The platform halves are thin
-adapters: a Windows **sender** (WASAPI loopback capture → UDP) and a macOS **receiver** (UDP →
-BlackHole-fork virtual input device).
+The low-latency send/receive engine is the [**AOO**](https://git.iem.at/aoo/aoo)
+(Audio over OSC) library — it owns the UDP wire protocol, jitter buffer, time-DLL
+clock-drift correction, **dynamic resampling** (so source and sink can run at
+different/​drifting rates), and packet resend. The platform halves are thin
+adapters around AOO's bare `AooSource`/`AooSink` (we provide the sockets, the
+NET/discovery layer is off): a Windows **sender** (WASAPI loopback capture →
+`AooSource` → UDP) and a macOS **receiver** (UDP → `AooSink` → BlackHole-fork
+virtual input device). A small **`core/`** library holds config, logging, and the
+fixed 48 kHz/float32 format constants.
+
+> AOO is PCM (bit-transparent, Opus off) and float32, fetched at configure time
+> via CMake `FetchContent` (Standard Improved BSD license). See
+> [docs/plan.md](docs/plan.md) for why AOO replaced the original hand-rolled
+> packet/jitter/drift modules.
 
 ## Repo layout
 
-| Path | What | Milestone |
-|---|---|---|
-| `core/` | Portable C++17 library (packet, jitter, ring, drift, config, log) | M1–M2 |
-| `tests/` | Catch2 unit tests for the core | M1+ |
-| `tools/` | Loopback harness + latency probe | M1 |
-| `receiver/` | macOS receiver process | M3 |
-| `driver-mac/` | BlackHole fork (virtual input device) | M3 |
-| `sender/` | Windows sender service | M4 |
-| `driver-win/` | Virtual-Audio-Driver fork (virtual output device) | M4 |
-| `config/` | Sample `sender.json` / `receiver.json` | — |
+| Path | What |
+|---|---|
+| `core/` | Config, logging, format constants (C++17) |
+| `tests/` | Catch2 unit tests (incl. an in-process AOO loopback) |
+| `tools/` | `aoo_send` — real-time WAV→AooSource sender (Mac test stand-in) |
+| `receiver/` | macOS receiver process (AooSink → CoreAudio) |
+| `driver-mac/` | BlackHole fork (virtual input device) |
+| `sender/` | Windows sender service (WASAPI → AooSource) |
+| `driver-win/` | Virtual-Audio-Driver fork (virtual output device, 48 kHz) |
+| `config/` | Sample `sender.json` / `receiver.json` |
 
-## Build (portable core + tests)
+## Build (core + tests)
 
-Requires **CMake ≥ 3.20**, a **C++17** compiler, **libsoxr** (`brew install libsoxr`), and
-network access on first configure (CMake fetches nlohmann/json and Catch2).
+Requires **CMake ≥ 3.20**, a **C++17** compiler, and network access on first
+configure (CMake fetches nlohmann/json, Catch2, and AOO). No system audio libs
+are needed — AOO is built from source into the binaries.
 
 ```sh
 cmake -S . -B build -G Ninja
@@ -37,72 +48,12 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-## Loopback harness (M1)
-
-Runs audio through the real wire path — frames → §7 packets → UDP over `127.0.0.1` → jitter
-buffer → frames — with optional packet loss / reordering, then reports how faithfully the
-output matches the input. Generates a sine signal by default, or reads a WAV with `--in`.
-Writes `<prefix>-input.wav` and `<prefix>-output.wav`. (POSIX sockets; macOS/Linux only.)
-
-```sh
-build/tools/loopback_harness                          # clean path -> bit-transparent: YES
-build/tools/loopback_harness --drop 0.02              # 2% loss -> concealment
-build/tools/loopback_harness --reorder 0.10           # reordering -> corrected, bit-exact
-build/tools/loopback_harness --in song.wav --out-prefix /tmp/t
-```
-
-Flags: `--frames 48..240` (samples/frame), `--channels`, `--rate`, `--seconds`, `--drop P`,
-`--reorder P`, `--jitter DEPTH`, `--port`, `--seed`, `--in FILE.wav`, `--out-prefix`.
-
-## Drift simulation (M2)
-
-Models the receiver pipeline (variable-rate resampler + PI drift controller + ring buffer)
-under a sender/consumer clock offset, with no wall clock — validates spec §8.4 in accelerated
-form. Exits non-zero if the buffer under/overruns.
-
-```sh
-build/tools/drift_sim --ppm 500 --minutes 60          # corrected -> STABLE, centered
-build/tools/drift_sim --ppm 200 --minutes 60 --no-correct   # -> GLITCHED (overflow)
-build/tools/drift_sim --ppm 300 --trace               # print fill/ratio trajectory
-```
-
-## Pipeline check — core fidelity on real audio (Windows + macOS)
-
-`pipeline_check` runs a real WAV through the **complete receiver DSP path** the
-live system uses — jitter buffer → drift-corrected resampler → lock-free ring →
-device-rate consumer — with **no network and no audio hardware**, and writes an
-output WAV you can listen to plus a stability/fidelity report. It's the offline
-way to answer "is the distortion our pipeline, or the environment?": if the
-output is clean here, the core is fine and any live glitching is the
-network/device side. Unlike the harnesses above it's **portable (no sockets)**,
-so it builds and runs identically on **both** machines (it's part of the normal
-`cmake --build build`; on Windows put vcpkg's `soxr.dll` on `PATH` to run it,
-same as the other binaries).
-
-```sh
-# Run your own audio through the full pipeline and listen to the result:
-build/tools/pipeline_check --in song.wav --out out.wav         # clean -> STABLE
-build/tools/pipeline_check --in song.wav --ppm 500             # +500 ppm clock drift, corrected
-build/tools/pipeline_check --in song.wav --drop 0.02 --reorder 0.05   # loss/reorder -> concealment
-build/tools/pipeline_check --ppm 3000 --no-correct             # generated sine -> GLITCHED (proves detection)
-```
-```bat
-:: Windows (PowerShell), with soxr.dll reachable:
-build\tools\pipeline_check.exe --in song.wav --out out.wav
-```
-
-Flags: `--in FILE` / `--out FILE`, `--frames` (jitter frame size), `--jitter-frames`
-(buffer depth), `--ppm` (sender/receiver clock offset), `--drop P`, `--reorder P`,
-`--no-correct` (disable drift correction), `--seconds`/`--rate`/`--channels` (for the
-generated sine when no `--in`), `--seed`. A fault-free run prints `RESULT: STABLE`
-and exits 0; under/overruns or NaNs print `GLITCHED` and exit non-zero (handy in CI).
-
-## macOS device + receiver (M3)
+## macOS device + receiver
 
 The **AudioPipe** virtual input device is a BlackHole fork in `driver-mac/` (build-time
 customized to AudioPipe / 2ch / 48 kHz). The **receiver** (`receiver/`) listens for UDP,
-runs the core pipeline (jitter buffer → drift-corrected resampler → lock-free ring), and
-plays into that device via a CoreAudio HAL output unit; apps select "AudioPipe" as a mic.
+runs the AOO sink (jitter buffer → drift-corrected dynamic resampling), and plays into that
+device via a CoreAudio HAL output unit; apps select "AudioPipe" as a mic.
 
 ```sh
 # 1. Build + install the device (sudo restarts coreaudiod):
@@ -114,15 +65,23 @@ scripts/mac_e2e.sh
 scripts/mac_e2e.sh song.wav
 ```
 
-The receiver and `udp_send` (a real-time §7 sender that stands in for the Windows half) build
-with the rest via CMake. See [driver-mac/README.md](driver-mac/README.md) for signing notes.
+`scripts/mac_e2e.sh` runs the receiver and `aoo_send` (a real-time WAV→`AooSource` sender that
+stands in for the Windows half) on one machine. `aoo_send` streams at the WAV's own rate, so it
+also exercises AOO's cross-rate resampling (e.g. a 44.1 kHz file → the 48 kHz device). See
+[driver-mac/README.md](driver-mac/README.md) for signing notes and [receiver/README.md](receiver/README.md)
+for the `latency_ms` tuning knob.
 
 ## Windows sender + device (M4)
 
-The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS):
+The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS).
+**Picking this up on Windows? Start with [docs/windows-handoff.md](docs/windows-handoff.md)**
+(orientation for a fresh session), then the step-by-step
+[docs/windows-bringup.md](docs/windows-bringup.md) checklist. None of the Windows half has been
+built since the AOO migration.
 
-- **`sender/`** — WASAPI shared-mode loopback capture → §7 packets → UDP, reusing `core/`.
-  Runs as a Windows Service (§5.6) or `--console`. See [sender/README.md](sender/README.md).
+- **`sender/`** — WASAPI shared-mode loopback capture → `AooSource` → UDP. AOO streams at the
+  captured rate and the Mac sink resamples to 48 kHz, so a non-48 kHz endpoint no longer
+  glitches. Runs as a Windows Service (§5.6) or `--console`. See [sender/README.md](sender/README.md).
 - **`driver-win/`** — fork of [Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver)
   (Sysvad-based) as the virtual **output** device named "AudioPipe". Built with the WDK +
   test-signing. See [driver-win/README.md](driver-win/README.md).
@@ -132,11 +91,25 @@ before the driver fork is finished — set `device_name` accordingly in `config/
 
 ## Status
 
+**Transport migrated to AOO.** The original hand-rolled packet/jitter/drift/resampler core was
+replaced by the AOO library (`AooSource`/`AooSink`). This fixed the sample-rate-mismatch dropout
+bug (a non-48 kHz source is now resampled instead of starving the device) and added time-DLL
+drift correction + packet resend. On-Mac e2e is glitch-free (0 over/underruns) at the default
+`latency_ms=50` for both 48 kHz and 44.1 kHz sources; all 11 unit tests pass.
+
+The ≤20 ms target (§9) is the open follow-up. The on-Mac loopback needs ~50 ms because of
+**arrival-timing jitter on a single contended box** — the receiver's fill-ratio log shows the
+buffer swinging 0.04..1.00 at low latency while the **measured device rate stays dead-on 48000 Hz
+(no drift)**; at 50 ms it settles to a tight 0.42..0.44. It's not the sender's pacing (making the
+sender burst-free didn't help — the jitter is receiver/scheduling-side). On the real link the two
+halves run on separate machines with a hardware-clocked WASAPI capture, so low-latency tuning
+belongs there. See [docs/plan.md](docs/plan.md).
+
 **M5–M7 — running end-to-end over the LAN, with operational logging and auto-start.**
 
-- **M4 built & tested on Windows** (VS 2022/MSVC, vcpkg `soxr`): one include-order fix and the
-  sender compiles; `core` 25/25 tests pass; the WASAPI-loopback → §7 → UDP path is verified on
-  the wire, and §5.7 resilience (no crash / recovers when the receiver is down) holds.
+- **M4 built & tested on Windows** (VS 2022/MSVC) — *for the original pre-AOO sender*: the
+  WASAPI-loopback → UDP path was verified on the wire and §5.7 resilience held. The AOO-based
+  sender rewrite has not yet been re-built on Windows (see the AOO note above).
 - **M5 — real Windows → macOS link works**, loss-free, audible on the Mac. Latency: on **Wi-Fi**
   the network alone is ~18 ms one-way with ~17 ms jitter, so the ≤20 ms target (a **wired**-LAN
   spec, §9) is not met over Wi-Fi — the pipeline itself sits at ~9 ms on a clean link. **Use

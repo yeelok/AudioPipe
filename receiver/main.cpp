@@ -1,12 +1,17 @@
-// AudioPipe macOS receiver (M3): receives §7 UDP packets, runs them through the
-// jitter buffer + drift correction, and plays the result into the AudioPipe
-// virtual device (the BlackHole fork). Apps select "AudioPipe" as an input and
-// hear the stream. Separate process per spec §6.3 (embedding into the plug-in
-// is the optional M9 path).
+// AudioPipe macOS receiver: receives an AOO stream over UDP and plays it into
+// the AudioPipe virtual device (the BlackHole fork). Apps select "AudioPipe" as
+// an input and hear the stream.
 //
-//   net thread:  recvfrom -> JitterBuffer.insert -> (primed) pop frame ->
-//                Resampler(drift ratio) -> SpscRingBuffer
-//   CoreAudio:   HAL output unit render callback pops the ring into the device
+//   net thread:  recvfrom -> AooSink::handleMessage; AooSink::send (resend
+//                requests / pings back to the source); AooSink::pollEvents
+//   CoreAudio:   the HAL render callback calls AooSink::process(), which runs
+//                the jitter buffer + time-DLL drift correction + dynamic
+//                resampling and writes the next block of audio.
+//
+// AOO (deps/aoo) owns the wire protocol, jitter buffering, clock-drift
+// correction and sample-rate conversion. Because the sink resamples the source
+// stream to the device rate, a non-48 kHz source no longer starves the device
+// (the old hand-rolled pipeline only had a +/-0.1% drift trim).
 //
 // macOS only (CoreAudio / AudioToolbox).
 
@@ -18,52 +23,74 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "aoo.h"
+#include "aoo_sink.hpp"
+
 #include "audiopipe/config.h"
-#include "audiopipe/drift_control.h"
-#include "audiopipe/format.h"
-#include "audiopipe/jitter_buffer.h"
 #include "audiopipe/log.h"
-#include "audiopipe/packet.h"
-#include "audiopipe/resampler.h"
-#include "audiopipe/ring_buffer.h"
 
 using namespace audiopipe;
 
 namespace {
 
+constexpr AooId   kSinkId   = 1;
+constexpr AooInt32 kMaxBlock = 4096; // upper bound for a single render block
+
 std::atomic<bool> g_stop{false};
 void on_signal(int) { g_stop.store(true); }
 
 struct RenderCtx {
-    SpscRingBuffer<float>*   ring;
-    int                      channels;
-    std::atomic<std::uint64_t> underruns{0};
+    AooSink*               sink     = nullptr;
+    int                    channels = 2;
+    std::vector<std::vector<float>> planar;  // per-channel scratch
+    std::vector<AooSample*>         ptrs;    // pointers into `planar`
 };
 
-// CoreAudio realtime callback: pop interleaved float frames from the ring;
-// fill any shortfall with silence. Lock-free and allocation-free.
+// CoreAudio realtime callback: pull the next block from the AOO sink (planar),
+// then interleave into the device buffer. AooSink::process fills silence
+// internally when the jitter buffer is empty (reported as underrun events).
 OSStatus render_cb(void* ref, AudioUnitRenderActionFlags*, const AudioTimeStamp*, UInt32,
                    UInt32 frames, AudioBufferList* io) {
     auto* ctx = static_cast<RenderCtx*>(ref);
     auto* out = static_cast<float*>(io->mBuffers[0].mData);
-    const std::size_t need = std::size_t(frames) * ctx->channels;
-    const std::size_t got  = ctx->ring->pop(out, need);
-    if (got < need) {
-        std::memset(out + got, 0, (need - got) * sizeof(float));
-        ctx->underruns.fetch_add(1, std::memory_order_relaxed);
+    const int ch = ctx->channels;
+
+    if (frames > UInt32(kMaxBlock)) { // never expected; stay safe
+        std::memset(out, 0, std::size_t(frames) * ch * sizeof(float));
+        return noErr;
+    }
+    for (int c = 0; c < ch; ++c) {
+        ctx->ptrs[c] = ctx->planar[c].data();
+    }
+    ctx->sink->process(ctx->ptrs.data(), AooInt32(frames), aoo_getCurrentNtpTime(),
+                       nullptr, nullptr);
+    for (UInt32 n = 0; n < frames; ++n) {
+        for (int c = 0; c < ch; ++c) {
+            out[n * ch + c] = ctx->planar[c][n];
+        }
     }
     return noErr;
+}
+
+// UDP send function handed to AooSink::send (sends control packets back to the
+// source — resend requests, pings). AOO supplies the destination address.
+AooInt32 AOO_CALL udp_send(void* user, const AooByte* data, AooInt32 size,
+                           const void* address, AooAddrSize addrlen, AooFlag) {
+    int fd = *static_cast<int*>(user);
+    auto n = ::sendto(fd, data, std::size_t(size), 0,
+                      static_cast<const sockaddr*>(address), addrlen);
+    return AooInt32(n);
 }
 
 // Find a CoreAudio device by name that has output streams (we play into it).
@@ -80,7 +107,6 @@ AudioDeviceID find_output_device(const std::string& name) {
                                    ids.data()) != noErr) {
         return kAudioObjectUnknown;
     }
-
     for (AudioDeviceID id : ids) {
         CFStringRef cf = nullptr;
         UInt32      ns = sizeof(cf);
@@ -115,8 +141,6 @@ UInt32 device_buffer_frames(AudioDeviceID dev) {
     return frames;
 }
 
-// Request a small device IO buffer to keep latency low (best effort; the
-// device clamps to its supported range). Latency is tuned for real in M5.
 void request_buffer_frames(AudioDeviceID dev, UInt32 want) {
     AudioObjectPropertyAddress a = {kAudioDevicePropertyBufferFrameSize,
                                     kAudioObjectPropertyScopeGlobal,
@@ -124,88 +148,39 @@ void request_buffer_frames(AudioDeviceID dev, UInt32 want) {
     AudioObjectSetPropertyData(dev, &a, 0, nullptr, sizeof(want), &want);
 }
 
-// Network + feeder thread: arrivals -> jitter buffer -> drift-corrected
-// resampler -> ring. The jitter buffer's frame size is learned from the first
-// packet (the sender fixes it per session).
-void net_thread(const ReceiverConfig cfg, SpscRingBuffer<float>* ring, std::size_t target_fill,
-                std::size_t capacity, Logger* log) {
-    int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        log->info("net: socket() failed");
-        return;
+Logger* g_log = nullptr;
+
+// Source endpoint + buffer-fill swing tracking. Touched only on the net thread
+// (the event handler runs there via pollEvents, as does the fill sampler), so
+// no synchronization is needed.
+sockaddr_storage g_src_ss{};
+AooAddrSize      g_src_len  = 0;
+AooId            g_src_id   = 0;
+bool             g_have_src = false;
+double           g_fill_min = 1e9, g_fill_max = -1e9;
+
+// AOO event handler (poll mode; invoked from the net thread via pollEvents).
+void AOO_CALL on_event(void* /*user*/, const AooEvent* event, AooThreadLevel) {
+    switch (event->type) {
+    case kAooEventStreamStart: {
+        const AooEndpoint& ep = event->streamStart.endpoint; // remember the source
+        if (ep.address && ep.addrlen <= sizeof(g_src_ss)) {
+            std::memcpy(&g_src_ss, ep.address, ep.addrlen);
+            g_src_len = ep.addrlen;
+            g_src_id  = ep.id;
+            g_have_src = true;
+        }
+        g_log->info("aoo: stream start");
+        break;
     }
-    int rcvbuf = 4 * 1024 * 1024;
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
-    timeval tv{};
-    tv.tv_usec = 200000; // 200 ms, so we can poll g_stop
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(cfg.listen_port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        log->info("net: bind() failed");
-        ::close(fd);
-        return;
+    case kAooEventStreamStop:    g_log->info("aoo: stream stop"); break;
+    case kAooEventFormatChange:  g_log->info("aoo: format change"); break;
+    case kAooEventBufferUnderrun:g_log->info("aoo: buffer UNDERRUN"); break;
+    case kAooEventBufferOverrun: g_log->info("aoo: buffer OVERRUN"); break;
+    case kAooEventBlockDrop:     g_log->info("aoo: block dropped (lost, unrecovered)"); break;
+    case kAooEventBlockXRun:     g_log->info("aoo: block xrun"); break;
+    default: break; // resend/ping/etc. — not logged
     }
-
-    std::vector<std::uint8_t> buf(2048);
-    std::unique_ptr<JitterBuffer> jb;
-    std::unique_ptr<Resampler>    rs;
-    DriftController               dc(target_fill, capacity);
-    std::vector<float>            payload, frame, out;
-    std::size_t                   frame_floats = 0, inserts = 0;
-    std::uint64_t                 pkts = 0, last_log_lost = 0;
-
-    while (!g_stop.load(std::memory_order_acquire)) {
-        const ssize_t n = ::recvfrom(fd, buf.data(), buf.size(), 0, nullptr, nullptr);
-        if (n <= 0) {
-            continue; // timeout (poll g_stop) or error
-        }
-        PacketHeader h{};
-        if (!decode_header(buf.data(), std::size_t(n), h)) {
-            continue;
-        }
-
-        if (!jb) { // lazy init from the first packet's geometry
-            frame_floats = std::size_t(h.frame_count) * h.channels;
-            jb  = std::make_unique<JitterBuffer>(cfg.jitter_frames, h.frame_count, h.channels);
-            rs  = std::make_unique<Resampler>(1.0, h.channels);
-            payload.assign(frame_floats, 0.0f);
-            frame.assign(frame_floats, 0.0f);
-            out.assign(frame_floats * 4 + 64, 0.0f);
-            log->info("net: stream started (" + std::to_string(h.frame_count) + " frames, " +
-                      std::to_string(h.channels) + "ch)");
-        }
-
-        if (decode_payload(buf.data(), std::size_t(n), h, payload.data(), payload.size()) !=
-            frame_floats) {
-            continue;
-        }
-        jb->insert(h.sequence, payload.data(), frame_floats);
-        ++pkts;
-
-        // Lock-step playout: one frame out per arrival once primed.
-        if (++inserts > cfg.jitter_frames) {
-            jb->pop_frame(frame.data());
-            const double ratio = dc.update(ring->size());
-            const std::size_t in_frames  = frame_floats / h.channels;
-            const std::size_t out_frames = rs->process(frame.data(), in_frames, out.data(),
-                                                        out.size() / h.channels, ratio);
-            ring->push(out.data(), out_frames * h.channels);
-        }
-
-        if ((pkts % 2400) == 0) { // ~ every 5 s at 2 ms frames
-            const std::uint64_t lost = jb->lost_count();
-            log->info("net: pkts=" + std::to_string(pkts) + " concealed=" + std::to_string(lost) +
-                      " (+" + std::to_string(lost - last_log_lost) + ") drift_ratio=" +
-                      std::to_string(dc.ratio()) + " ring=" + std::to_string(ring->size()));
-            last_log_lost = lost;
-        }
-    }
-    ::close(fd);
-    log->info("net: stopped, total packets=" + std::to_string(pkts));
 }
 
 } // namespace
@@ -228,10 +203,16 @@ int main(int argc, char** argv) {
     }
 
     Logger log(cfg.log_file);
+    g_log = &log;
     log.info("receiver: starting (port=" + std::to_string(cfg.listen_port) + " device='" +
              cfg.device_name + "')");
-    std::fprintf(stderr, "AudioPipe receiver: port %u -> device '%s'\n", cfg.listen_port,
+    std::fprintf(stderr, "AudioPipe receiver (AOO): port %u -> device '%s'\n", cfg.listen_port,
                  cfg.device_name.c_str());
+
+    if (aoo_initialize(nullptr) != kAooOk) {
+        std::fprintf(stderr, "aoo_initialize failed\n");
+        return 1;
+    }
 
     const AudioDeviceID dev = find_output_device(cfg.device_name);
     if (dev == kAudioObjectUnknown) {
@@ -242,13 +223,40 @@ int main(int argc, char** argv) {
     }
 
     request_buffer_frames(dev, 128); // low-latency request; device may clamp
-    const UInt32      dev_buf      = device_buffer_frames(dev);
-    const std::size_t dev_floats   = std::size_t(dev_buf) * cfg.channels;
-    const std::size_t target_fill  = 3 * dev_floats;  // ring cushion (drift target)
-    const std::size_t ring_capacity = 16 * dev_floats;
-    SpscRingBuffer<float> ring(ring_capacity);
+    const UInt32 dev_buf = device_buffer_frames(dev);
 
-    // --- Set up the HAL output unit on the AudioPipe device ---------------
+    // --- AOO sink ---------------------------------------------------------
+    // Playout latency (jitter cushion) in seconds, from config.latency_ms.
+    // AUDIOPIPE_LATENCY_MS overrides it for quick tuning without a rebuild.
+    double latency_s = double(cfg.latency_ms) / 1000.0;
+    if (const char* env = std::getenv("AUDIOPIPE_LATENCY_MS")) { // quick tuning override
+        latency_s = std::atof(env) / 1000.0;
+    }
+    AooSink::Ptr sink = AooSink::create(kSinkId);
+    sink->setup(cfg.channels, AooSampleRate(cfg.sample_rate), kMaxBlock, 0);
+    // Buffer capacity is decoupled from playout latency: keep latency low (the
+    // delay you hear) but give the network packet buffer generous headroom to
+    // absorb scheduling/arrival bursts without overrunning. Default 4x latency
+    // (min 80 ms); override with AUDIOPIPE_BUFFER_MS.
+    double buffer_s = std::max(latency_s * 4.0, 0.08);
+    if (const char* env = std::getenv("AUDIOPIPE_BUFFER_MS")) {
+        buffer_s = std::atof(env) / 1000.0;
+    }
+    sink->setLatency(latency_s);
+    sink->setBufferSize(buffer_s);
+    sink->setResendData(kAooTrue);          // ask source to resend lost packets (low-RTT LAN)
+    sink->setDynamicResampling(kAooTrue);   // time-DLL drift correction: track the device
+                                            // clock vs the source clock and resample to match
+                                            // (otherwise the small offset overruns the buffer)
+    sink->setEventHandler(on_event, nullptr, kAooEventModePoll);
+
+    RenderCtx ctx;
+    ctx.sink     = sink.get();
+    ctx.channels = cfg.channels;
+    ctx.planar.assign(cfg.channels, std::vector<float>(kMaxBlock, 0.0f));
+    ctx.ptrs.assign(cfg.channels, nullptr);
+
+    // --- HAL output unit on the AudioPipe device --------------------------
     AudioComponentDescription desc = {kAudioUnitType_Output, kAudioUnitSubType_HALOutput,
                                       kAudioUnitManufacturer_Apple, 0, 0};
     AudioComponent comp = AudioComponentFindNext(nullptr, &desc);
@@ -278,9 +286,6 @@ int main(int argc, char** argv) {
     AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &fmt,
                          sizeof(fmt));
 
-    RenderCtx ctx;
-    ctx.ring     = &ring;
-    ctx.channels = cfg.channels;
     AURenderCallbackStruct cb = {render_cb, &ctx};
     AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb,
                          sizeof(cb));
@@ -290,20 +295,80 @@ int main(int argc, char** argv) {
         return 1;
     }
     log.info("receiver: audio unit started (dev_buf=" + std::to_string(dev_buf) +
-             " target=" + std::to_string(target_fill) + " cap=" + std::to_string(ring_capacity) +
-             ")");
+             " latency_ms=" + std::to_string(int(latency_s * 1000)) + ")");
 
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
-    std::thread net(net_thread, cfg, &ring, target_fill, ring_capacity, &log);
+    // --- Network thread: recvfrom -> sink; sink -> send; poll events ------
+    int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        std::fprintf(stderr, "socket() failed\n");
+        return 1;
+    }
+    int rcvbuf = 4 * 1024 * 1024;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    timeval tv{};
+    tv.tv_usec = 200000; // 200 ms, so we can poll g_stop
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons(cfg.listen_port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::fprintf(stderr, "bind(%u) failed\n", cfg.listen_port);
+        return 1;
+    }
+
+    std::thread net([&] {
+        std::vector<AooByte> buf(AOO_MAX_PACKET_SIZE);
+        std::uint64_t        pkts = 0, last_log = 0;
+        while (!g_stop.load(std::memory_order_acquire)) {
+            sockaddr_storage src{};
+            socklen_t        srclen = sizeof(src);
+            const ssize_t n = ::recvfrom(fd, buf.data(), buf.size(), 0,
+                                         reinterpret_cast<sockaddr*>(&src), &srclen);
+            if (n > 0) {
+                sink->handleMessage(buf.data(), AooInt32(n), &src, srclen);
+                ++pkts;
+            }
+            sink->send(udp_send, &fd);
+            sink->pollEvents();
+
+            // Sample the jitter-buffer fill ratio (0=empty, 1=full) to expose
+            // how widely it swings; ~1.0 means an overrun is imminent.
+            if (g_have_src) {
+                AooEndpoint ep{&g_src_ss, g_src_len, g_src_id};
+                double ratio = 0.0;
+                if (sink->getBufferFillRatio(ep, ratio) == kAooOk) {
+                    g_fill_min = std::min(g_fill_min, ratio);
+                    g_fill_max = std::max(g_fill_max, ratio);
+                }
+            }
+            if (pkts - last_log >= 2400) { // ~5 s heartbeat at 2 ms blocks
+                AooSampleRate sr = 0.0;
+                sink->getRealSampleRate(sr);
+                char line[160];
+                std::snprintf(line, sizeof line,
+                              "aoo: buffer fill swing %.2f..%.2f  measured device rate %.1f Hz",
+                              g_fill_min, g_fill_max, double(sr));
+                log.info(line);
+                g_fill_min = 1e9;
+                g_fill_max = -1e9;
+                last_log = pkts;
+            }
+        }
+    });
+
     net.join();
+    ::close(fd);
 
     AudioOutputUnitStop(unit);
     AudioUnitUninitialize(unit);
     AudioComponentInstanceDispose(unit);
-    log.info("receiver: stopped (render underruns=" +
-             std::to_string(ctx.underruns.load()) + ")");
+    sink.reset();
+    aoo_terminate();
+    log.info("receiver: stopped");
     std::fprintf(stderr, "receiver: stopped\n");
     return 0;
 }

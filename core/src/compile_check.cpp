@@ -1,14 +1,11 @@
-// Guarantees every public core header parses cleanly at M0, before its
-// implementation lands. Per-milestone implementations replace the TODOs in the
-// individual headers; this file just keeps the interfaces honest.
+// Guarantees the remaining public core headers parse cleanly. The transport
+// modules (packet/jitter/drift/resampler) were removed when AudioPipe adopted
+// the AOO library (deps/aoo) for the send/receive path; what's left in core/ is
+// config, logging, the audio-format constants, and a general lock-free ring.
 
 #include "audiopipe/config.h"
-#include "audiopipe/drift_control.h"
 #include "audiopipe/format.h"
-#include "audiopipe/jitter_buffer.h"
 #include "audiopipe/log.h"
-#include "audiopipe/packet.h"
-#include "audiopipe/resampler.h"
 #include "audiopipe/ring_buffer.h"
 
 namespace audiopipe {
@@ -18,7 +15,7 @@ namespace {
 [[maybe_unused]] void header_smoke() {
     SpscRingBuffer<float> rb(8);
     (void)rb;
-    static_assert(sizeof(PacketHeader) == 18, "wire header size");
+    static_assert(kSampleRate == 48'000, "fixed 48 kHz format");
 }
 
 } // namespace

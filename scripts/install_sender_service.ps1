@@ -5,11 +5,10 @@
     (spec section 5.6) with crash auto-restart (section 10).
 
 .DESCRIPTION
-    Deploys the sender exe, soxr.dll, and config into an install directory, then
-    registers a SERVICE_WIN32_OWN_PROCESS service set to start at boot (no login)
-    and to auto-restart if the process dies. A Windows service runs with a clean
-    environment and no user PATH, so soxr.dll MUST live next to the exe -- this
-    script copies it for you.
+    Deploys the sender exe and config into an install directory, then registers a
+    SERVICE_WIN32_OWN_PROCESS service set to start at boot (no login) and to
+    auto-restart if the process dies. The sender statically links the AOO library
+    (built into the exe), so there is no extra runtime DLL to deploy.
 
     The service reads its config from <InstallDir>\config\sender.json. Edit that
     file (set "dest_ip" to the Mac's LAN IP) before starting.
@@ -22,7 +21,6 @@
 #>
 param(
     [string]$ExePath     = "$PSScriptRoot\..\build\sender\audiopipe_sender.exe",
-    [string]$SoxrDll     = "$env:USERPROFILE\vcpkg\installed\x64-windows\bin\soxr.dll",
     [string]$ConfigPath  = "$PSScriptRoot\..\config\sender.json",
     [string]$InstallDir  = "C:\AudioPipe",
     [string]$ServiceName = "AudioPipeSender",
@@ -35,16 +33,15 @@ if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Run this from an elevated (Administrator) PowerShell."
 }
 
-foreach ($f in @($ExePath, $SoxrDll, $ConfigPath)) {
+foreach ($f in @($ExePath, $ConfigPath)) {
     if (-not (Test-Path $f)) { throw "Missing required file: $f" }
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 New-Item -ItemType Directory -Force -Path "$InstallDir\config" | Out-Null
 Copy-Item $ExePath    "$InstallDir\audiopipe_sender.exe" -Force
-Copy-Item $SoxrDll    "$InstallDir\soxr.dll"             -Force
 Copy-Item $ConfigPath "$InstallDir\config\sender.json"   -Force
-Write-Host "Deployed exe + soxr.dll + config to $InstallDir"
+Write-Host "Deployed exe + config to $InstallDir"
 
 # Remove any previous instance so this is idempotent.
 sc.exe query $ServiceName *> $null
