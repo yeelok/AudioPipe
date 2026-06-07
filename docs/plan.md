@@ -227,18 +227,26 @@ cause:
 | 50 | **0 / 0** | **0.42 .. 0.44** (tight, centered) | 48000.0 Hz |
 
 The measured rate is **dead-on 48000 Hz at every latency**, so there is *no*
-clock drift or rate surplus. The over/underruns are purely **arrival-timing
-jitter**: `tools/aoo_send` paces blocks with `sleep_until`, which macOS timer-
-coalesces into bursts, so packets arrive in clumps that swing the buffer across
-its whole range. Only a ~50 ms buffer is deep enough not to overflow on a burst
-(then the DLL settles the fill into a tight 0.42–0.44 band). Running the machine
-idle didn't help, so the jitter is the software pacing itself, not CPU contention.
+clock drift or rate surplus — the over/underruns are pure **arrival-timing
+jitter** (the buffer swings to its edges). Only a ~50 ms buffer is deep enough
+not to overflow on a swing (then the DLL settles the fill into a tight 0.42–0.44
+band).
+
+**What it is NOT: sender pacing.** The obvious suspect was `tools/aoo_send`'s
+`sleep_until` getting timer-coalesced into bursts. We tested that directly —
+replaced it with hybrid sleep+busy-spin pacing (regular, sub-ms delivery) and
+re-ran the idle sweep: **no change** (still ~138 overruns, still 0.04..1.00 at
+10–20 ms). So the jitter is **receiver/scheduling-side**, not the sender: on a
+single machine the sender process, the receiver's net thread, the CoreAudio
+render thread, and the software-clocked virtual device all contend, and the
+busy-spin only added CPU pressure. We reverted it (kept the lightweight sleep).
 
 **Open follow-up — the ≤20 ms target (§9).** This jitter is a property of the
-*test sender*, not AOO or the real link. The production Windows sender is clocked
-by the WASAPI capture interrupt (regular, hardware-timed), runs on a separate
-machine from the receiver, and the LAN adds only bounded jitter — exactly the
-regime AOO's "5–20 ms on local networks" guidance targets. Low-latency tuning
-toward ≤20 ms should therefore be validated on the real wired Windows→Mac link;
-en route, `tools/aoo_send` could be made burst-free (busy-wait pacing or a
-real-time thread) to serve as a fairer on-Mac proxy.
+*single-box on-Mac test*, not AOO or the real link. On the production path the
+Windows sender is clocked by the WASAPI capture interrupt (hardware-timed), it
+runs on a *separate machine* from the receiver (no thread contention between the
+two halves), and the LAN adds only bounded jitter — exactly the regime AOO's
+"5–20 ms on local networks" guidance targets. So **low-latency validation belongs
+on the real wired Windows→Mac link**, not the on-Mac loopback. If a fair on-Mac
+proxy is ever needed, the lever is receiver-side (e.g. raise the net thread's
+scheduling priority / reduce its per-packet work), not the sender.

@@ -73,7 +73,10 @@ for the `latency_ms` tuning knob.
 
 ## Windows sender + device (M4)
 
-The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS):
+The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS).
+**First time? Follow [docs/windows-bringup.md](docs/windows-bringup.md)** — a step-by-step
+checklist for compiling and validating the AOO sender + driver (none of it has been built on
+Windows since the migration).
 
 - **`sender/`** — WASAPI shared-mode loopback capture → `AooSource` → UDP. AOO streams at the
   captured rate and the Mac sink resamples to 48 kHz, so a non-48 kHz endpoint no longer
@@ -93,12 +96,13 @@ bug (a non-48 kHz source is now resampled instead of starving the device) and ad
 drift correction + packet resend. On-Mac e2e is glitch-free (0 over/underruns) at the default
 `latency_ms=50` for both 48 kHz and 44.1 kHz sources; all 11 unit tests pass.
 
-The ≤20 ms target (§9) is the open follow-up. The on-Mac loopback needs ~50 ms only because the
-test sender (`tools/aoo_send`) paces with `sleep_until`, which macOS coalesces into bursts — the
-receiver's fill-ratio log shows the buffer swinging 0.04..1.00 at low latency while the **measured
-device rate stays dead-on 48000 Hz (no drift)**; at 50 ms the fill settles to a tight 0.42..0.44.
-The real Windows sender is hardware-clocked (regular WASAPI capture, separate machine), so
-low-latency tuning belongs on the real wired link. See [docs/plan.md](docs/plan.md).
+The ≤20 ms target (§9) is the open follow-up. The on-Mac loopback needs ~50 ms because of
+**arrival-timing jitter on a single contended box** — the receiver's fill-ratio log shows the
+buffer swinging 0.04..1.00 at low latency while the **measured device rate stays dead-on 48000 Hz
+(no drift)**; at 50 ms it settles to a tight 0.42..0.44. It's not the sender's pacing (making the
+sender burst-free didn't help — the jitter is receiver/scheduling-side). On the real link the two
+halves run on separate machines with a hardware-clocked WASAPI capture, so low-latency tuning
+belongs there. See [docs/plan.md](docs/plan.md).
 
 **M5–M7 — running end-to-end over the LAN, with operational logging and auto-start.**
 
