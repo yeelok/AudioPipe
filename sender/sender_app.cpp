@@ -2,9 +2,14 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>  // SIO_UDP_CONNRESET
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <timeapi.h>  // timeBeginPeriod/timeEndPeriod (winmm)
+
+#ifndef SIO_UDP_CONNRESET            // declared in <mstcpip.h>, but guarded in some SDKs
+#  define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 
 #include <string>
 #include <thread>
@@ -76,6 +81,15 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
         aoo_terminate();
         return 1;
     }
+    // Windows surfaces an ICMP "port unreachable" from the destination as
+    // WSAECONNRESET on the next send/recv -- that permanently breaks this socket
+    // (AOO can no longer drain its send buffer -> endless "send buffer overflow")
+    // whenever the receiver is down/unreachable. Disable it so a missing receiver
+    // is just silently-dropped UDP (spec 5.7: no crash if the network is down).
+    BOOL  conn_reset  = FALSE;
+    DWORD ioctl_bytes = 0;
+    ::WSAIoctl(s, SIO_UDP_CONNRESET, &conn_reset, sizeof(conn_reset), nullptr, 0,
+               &ioctl_bytes, nullptr, nullptr);
     DWORD rcv_to = 2; // ms; drain the AOO send buffer promptly (matches tools/aoo_send)
     ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&rcv_to), sizeof(rcv_to));
     sockaddr_in dst{};
