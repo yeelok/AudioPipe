@@ -4,6 +4,7 @@
 #include <ws2tcpip.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <timeapi.h>  // timeBeginPeriod/timeEndPeriod (winmm)
 
 #include <string>
 #include <thread>
@@ -38,6 +39,15 @@ AooInt32 AOO_CALL udp_send(void* user, const AooByte* data, AooInt32 size,
                              static_cast<const sockaddr*>(address), int(addrlen)));
 }
 
+// RAII: request 1 ms multimedia-timer resolution for the duration of a run.
+// The capture poll loop (Sleep) and the net-thread drain (recvfrom timeout) both
+// need fine timer granularity; at Windows' default ~15.6 ms they fire too coarsely
+// and the AOO source's send buffer overflows. Must be balanced with timeEndPeriod.
+struct TimerResolutionGuard {
+    TimerResolutionGuard()  { timeBeginPeriod(1); }
+    ~TimerResolutionGuard() { timeEndPeriod(1); }
+};
+
 void AOO_CALL on_event(void*, const AooEvent* e, AooThreadLevel) {
     if (!g_log) return;
     switch (e->type) {
@@ -53,6 +63,7 @@ void AOO_CALL on_event(void*, const AooEvent* e, AooThreadLevel) {
 
 int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
     g_log = &log;
+    TimerResolutionGuard timer_res; // 1 ms timer resolution (see struct above)
     if (aoo_initialize(nullptr) != kAooOk) {
         log.info("sender: aoo_initialize failed");
         return 1;
@@ -65,7 +76,7 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
         aoo_terminate();
         return 1;
     }
-    DWORD rcv_to = 5; // ms; keep the net thread responsive to resend requests
+    DWORD rcv_to = 2; // ms; drain the AOO send buffer promptly (matches tools/aoo_send)
     ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&rcv_to), sizeof(rcv_to));
     sockaddr_in dst{};
     dst.sin_family = AF_INET;
@@ -105,7 +116,7 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
     source->setEventHandler(on_event, nullptr, kAooEventModePoll);
     source->setup(ch, AooSampleRate(rate), block, 0);
     AooFormatPcm fmt;
-    AooFormatPcm_init(&fmt, ch, AooSampleRate(rate), block, kAooPcmFloat32);
+    AooFormatPcm_init(&fmt, ch, AooInt32(rate), block, kAooPcmFloat32); // PCM format rate is AooInt32 (setup() above takes the double AooSampleRate)
     source->setFormat(fmt.header);
     source->setResendBufferSize(0.05);        // honor sink resend requests
     source->setDynamicResampling(kAooTrue);    // measure the WASAPI capture clock

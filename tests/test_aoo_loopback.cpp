@@ -13,8 +13,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#ifdef _WIN32
+#  define NOMINMAX       // winsock2.h pulls in windows.h, whose max/min macros break std::max
+#  include <winsock2.h>
+#  include <ws2tcpip.h>  // sockaddr_in, htons, inet_pton, WSAStartup
+#else
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -33,6 +39,7 @@ constexpr AooId kSrcId  = 1;
 constexpr AooId kSinkId = 1;
 constexpr int   kChannels = 2;
 constexpr int   kBlock    = 64;
+constexpr double kPi      = 3.14159265358979323846; // M_PI isn't portable (MSVC needs _USE_MATH_DEFINES)
 
 struct Loopback {
     AooSource::Ptr source;
@@ -61,6 +68,15 @@ AooInt32 AOO_CALL sink_send(void* user, const AooByte* data, AooInt32 size,
 // not safe to cycle repeatedly (Catch2 re-runs the body once per SECTION), so
 // we init lazily on first use and let process exit clean up.
 void ensure_aoo() {
+#ifdef _WIN32
+    // inet_pton/htons below need Winsock initialized (AOO_NET is off, so AOO
+    // doesn't do it for us). Once per process; the OS reclaims it on exit.
+    static const bool wsa = [] {
+        WSADATA d;
+        return WSAStartup(MAKEWORD(2, 2), &d) == 0;
+    }();
+    REQUIRE(wsa);
+#endif
     static const bool ok = (aoo_initialize(nullptr) == kAooOk);
     REQUIRE(ok);
 }
@@ -135,7 +151,7 @@ Result run_loopback(AooSampleRate srcRate, AooSampleRate sinkRate, double second
         srcAccum -= m;
         if (m > kBlock) m = kBlock;
         for (int i = 0; i < m; ++i) {
-            const float s = 0.5f * float(std::sin(phase * 2.0 * M_PI));
+            const float s = 0.5f * float(std::sin(phase * 2.0 * kPi));
             phase += adv;
             for (int c = 0; c < kChannels; ++c) inBuf[c * kBlock + i] = s;
         }

@@ -16,6 +16,7 @@ target_link_libraries(audiopipe_sender PRIVATE
     ole32        # COM (MMDeviceEnumerator)
     propsys      # PropVariantClear
     ws2_32       # Winsock
+    winmm        # timeBeginPeriod (1 ms timer resolution for the capture/net loops)
     avrt         # (reserved for MMCSS thread prioritization)
 )
 
