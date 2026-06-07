@@ -175,6 +175,13 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
 
     std::uint64_t processed = 0, last_hb = 0;
     const std::uint64_t hb_blocks = rate ? (30u * rate) / std::uint32_t(block) : 15000u;
+    // Self-heal: an AOO source stream-state stall (observed mid-session) makes the
+    // send buffer overflow on *every* block and never drain, so audio stops until a
+    // manual restart. Detect a sustained stall and force a fresh stream -- startStream
+    // unconditionally resets the stream state (sequence + queue), so the sender (and
+    // the starved sink) recover on their own.
+    std::uint64_t consec_overflow = 0;
+    const std::uint64_t stall_blocks = rate ? rate / (4u * std::uint32_t(block)) : 125u; // ~0.25 s
 
     while (!stop.load(std::memory_order_acquire)) {
         bool silent = false;
@@ -190,7 +197,16 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
                 }
             }
             for (std::uint16_t c = 0; c < ch; ++c) ptrs[c] = planar[c].data();
-            source->process(ptrs.data(), block, aoo_getCurrentNtpTime());
+            if (source->process(ptrs.data(), block, aoo_getCurrentNtpTime()) == kAooErrorOverflow) {
+                if (++consec_overflow == stall_blocks) {
+                    log.info("sender: AOO send buffer stalled (~" + std::to_string(stall_blocks) +
+                             " blocks); restarting stream to recover");
+                    source->startStream(0, nullptr);
+                    consec_overflow = 0;
+                }
+            } else {
+                consec_overflow = 0;
+            }
             consumed += block_floats;
             ++processed;
         }
