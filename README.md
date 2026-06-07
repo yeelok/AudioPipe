@@ -90,6 +90,38 @@ remains.
 The sender can capture the default output (or any virtual cable) for incremental testing
 before the driver fork is finished — set `device_name` accordingly in `config/sender.json`.
 
+## Install (Windows): device + sender service
+
+With both halves built, install the whole Windows side in one go — the **AudioPipe** virtual
+output device (persistent) **and** the sender as an auto-start, crash-restarting Windows Service.
+From an **elevated** PowerShell (Win+X → *Terminal (Admin)*):
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force   # see note below
+.\scripts\install_all.ps1 -Start
+```
+
+`install_all.ps1` is a thin orchestrator over `driver-win\install_persistent.ps1` (trust the test
+cert + install the driver as a **persistent root device** that survives reboots) and
+`scripts\install_sender_service.ps1` (deploy the exe + `sender.json` to `C:\AudioPipe`, register the
+`AudioPipeSender` service). It only **installs** — build the sender (see **Build** above) and the
+driver ([driver-win/README.md](driver-win/README.md)) first. Use `-SkipDriver` to (re)install just
+the service after rebuilding the sender; remove everything with `.\scripts\uninstall_sender_service.ps1 -Purge`.
+
+> **Why `Set-ExecutionPolicy -Scope Process Bypass -Force` first?** Windows blocks unsigned `.ps1`
+> files by default (execution policy `Restricted`), so the script won't run otherwise. `-Scope Process`
+> lifts the block **for the current window only** and reverts when you close it — it changes nothing
+> machine- or user-wide, and it's *not* a security hole (the policy is a guardrail against
+> accidentally running untrusted scripts, not a sandbox). It's a **separate gate from elevation**: the
+> install needs an **admin** window (it touches a driver + a Windows service) **and** the policy bypass.
+> One-shot alternative that saves neither setting: `powershell -ExecutionPolicy Bypass -File .\scripts\install_all.ps1 -Start` (still launch it elevated).
+
+**Prerequisites the installer assumes:** test-signing must be on — a one-time `bcdedit /set testsigning on`
++ reboot, since the driver `.sys` is test-signed (see [driver-win/README.md](driver-win/README.md)). And
+the service runs as **LocalSystem in session 0**, where WASAPI loopback may not reach session-bound
+audio; if the Mac gets no sound, verify in your user session first with
+`build\sender\audiopipe_sender.exe --console --config config\sender.json`.
+
 ## Status
 
 **Transport migrated to AOO.** The original hand-rolled packet/jitter/drift/resampler core was
