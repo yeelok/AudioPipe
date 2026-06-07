@@ -40,14 +40,19 @@ Logger* g_log = nullptr;
 AooInt32 AOO_CALL udp_send(void* user, const AooByte* data, AooInt32 size,
                            const void* address, AooAddrSize addrlen, AooFlag) {
     SOCKET s = *static_cast<SOCKET*>(user);
-    return AooInt32(::sendto(s, reinterpret_cast<const char*>(data), int(size), 0,
-                             static_cast<const sockaddr*>(address), int(addrlen)));
+    const int sent = ::sendto(s, reinterpret_cast<const char*>(data), int(size), 0,
+                              static_cast<const sockaddr*>(address), int(addrlen));
+    // Non-blocking socket: if the send can't go out now (WSAEWOULDBLOCK) or errors,
+    // drop this packet and report it as sent so AOO keeps draining its buffer instead
+    // of stalling. Real-time -- stale audio is useless; the sink recovers any gap via
+    // its jitter buffer / resend.
+    return sent == SOCKET_ERROR ? size : AooInt32(sent);
 }
 
 // RAII: request 1 ms multimedia-timer resolution for the duration of a run.
-// The capture poll loop (Sleep) and the net-thread drain (recvfrom timeout) both
-// need fine timer granularity; at Windows' default ~15.6 ms they fire too coarsely
-// and the AOO source's send buffer overflows. Must be balanced with timeEndPeriod.
+// The capture poll loop and the net-thread pacing both Sleep(1); at Windows' default
+// ~15.6 ms timer granularity those sleeps are far too coarse and the AOO source's
+// send buffer overflows. Must be balanced with timeEndPeriod.
 struct TimerResolutionGuard {
     TimerResolutionGuard()  { timeBeginPeriod(1); }
     ~TimerResolutionGuard() { timeEndPeriod(1); }
@@ -90,8 +95,12 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
     DWORD ioctl_bytes = 0;
     ::WSAIoctl(s, SIO_UDP_CONNRESET, &conn_reset, sizeof(conn_reset), nullptr, 0,
                &ioctl_bytes, nullptr, nullptr);
-    DWORD rcv_to = 2; // ms; drain the AOO send buffer promptly (matches tools/aoo_send)
-    ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&rcv_to), sizeof(rcv_to));
+    // Non-blocking: the net thread must never stall in sendto (a stalled send backs
+    // the stream up). sendto/recvfrom return at once; a momentarily full send buffer
+    // drops the packet (see udp_send), and the thread paces itself with a 1 ms sleep
+    // when there is nothing to receive.
+    u_long nonblocking = 1;
+    ::ioctlsocket(s, FIONBIO, &nonblocking);
     sockaddr_in dst{};
     dst.sin_family = AF_INET;
     dst.sin_port   = htons(cfg.dest_port);
@@ -149,6 +158,8 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
                                      reinterpret_cast<sockaddr*>(&from), &fromlen);
             if (n > 0) {
                 source->handleMessage(buf.data(), AooInt32(n), &from, AooAddrSize(fromlen));
+            } else {
+                ::Sleep(1); // non-blocking socket: pace the loop instead of busy-spinning
             }
             source->pollEvents();
         }
