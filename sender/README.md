@@ -13,17 +13,16 @@ and logging. Runs as a **Windows Service** (§5.6) or in the foreground for test
 ## Prerequisites
 
 - Visual Studio 2022 (MSVC) + CMake ≥ 3.20
-- [vcpkg](https://github.com/microsoft/vcpkg) for libsoxr (pulled in by `core`):
-  ```
-  vcpkg install soxr
-  ```
+- Network access on first configure (CMake fetches nlohmann/json, Catch2, and
+  the AOO library). No vcpkg/system audio libs are needed — AOO is built from
+  source straight into the exe.
 
 ## Build
 
-From the repo root, using the vcpkg toolchain:
+From the repo root:
 
 ```bat
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake
+cmake -S . -B build
 cmake --build build --config Release
 ```
 
@@ -60,12 +59,10 @@ receiver, and you should hear it on the Mac.
 
 ## Install as a service (§5.6, §10 auto-restart)
 
-A Windows service runs with a **clean environment and no user PATH**, so
-`soxr.dll` (pulled in by `core`) must sit **next to the exe** — a bare
-`sc create` against the build output would start and then fail to load it. The
-service also reads `config\sender.json` from **its own folder**. The install
-script handles both: it copies the exe, `soxr.dll`, and config into an install
-dir, registers an auto-start service, and configures crash auto-restart.
+The exe statically links AOO, so it's self-contained — no runtime DLL to place
+next to it. A Windows service reads `config\sender.json` from **its own folder**,
+so the install script copies the exe and config into an install dir, registers an
+auto-start service, and configures crash auto-restart.
 
 From an **elevated** PowerShell:
 
@@ -88,7 +85,7 @@ the `log_file` path in the config. To remove it:
 > Microsoft Visual C++ Redistributable (x64). The UCRT ships with Windows 10.
 
 Manual equivalent (if you prefer raw `sc`): copy `audiopipe_sender.exe` +
-`soxr.dll` + a `config\sender.json` into `C:\AudioPipe\`, then
+a `config\sender.json` into `C:\AudioPipe\`, then
 `sc create AudioPipeSender binPath= "C:\AudioPipe\audiopipe_sender.exe" start= auto`
 (the space after `binPath=` is required), and
 `sc failure AudioPipeSender reset= 86400 actions= restart/5000/restart/5000/restart/5000`.

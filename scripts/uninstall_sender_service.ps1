@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Stops and deletes the service. Pass -Purge to also delete the install
-    directory (exe, soxr.dll, config, logs). Run from an elevated PowerShell.
+    directory (exe, config, logs). Run from an elevated PowerShell.
 
 .EXAMPLE
     .\scripts\uninstall_sender_service.ps1 -Purge

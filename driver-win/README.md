@@ -51,29 +51,35 @@ template, UTF-16) and does two things:
    Windows 10 PnP reports *"no better matching drivers"* and binds the generic
    null driver instead of ours. Override with `-MinBuild`.
 
-## 1b. Pin the endpoint to 48 kHz (required)
+## 1b. Pin the endpoint to 48 kHz (recommended)
 
 ```powershell
 .\apply_48k.ps1
 ```
 
-AudioPipe is a fixed **48 kHz / float32** pipeline: the wire protocol carries no
-sample rate, and the macOS receiver plays into a 48 kHz device with only a
-**±0.1 % drift trim — not a sample-rate converter**. If the Windows endpoint's
-shared-mode **mix format** is any other rate, the sender captures at that rate
-and the receiver's playout ring **starves** (rates < 48k) or **overflows**
-(rates > 48k) → continuous dropouts, clicks, and a pitch/speed shift.
+> **Not required** since the macOS receiver moved to the AOO library: the
+> `AooSink` resamples whatever rate the sender streams to the 48 kHz device, so a
+> non-48 kHz endpoint no longer starves it (that earlier dropout bug is gone).
+> You can skip this step and the link still works — handy during bring-up.
 
-Upstream's speaker endpoint advertises **8 kHz – 192 kHz (including 44.1 kHz)**,
-so Windows is free to choose a non-48k mix format (e.g. a machine left at "CD
-quality, 44100 Hz"). `apply_48k.ps1` edits
-`upstream\Source\Filters\speakerwavtable.h` so the speaker advertises **48 kHz
-only** (16/24/32-bit, stereo) — the supported-formats array, the modes array,
-and the KS data range are all narrowed to 48000 Hz. Windows then has exactly one
-rate to pick, the mix format is always 48 kHz, and the whole path stays
-bit-transparent with no resampling. The script is idempotent, backs up the
-original to `speakerwavtable.h.orig`, and throws if upstream's table shape
-changed (so it never silently leaves a non-48k format in).
+Pinning to 48 kHz is still **recommended** for the best path:
+
+- **Bit-transparency** — at 48 kHz, source and device rates match and AOO does
+  *zero* resampling (bit-exact, per spec §4). Unpinned at 44.1 kHz, AOO resamples
+  44.1 → 48 kHz: high quality, but no longer bit-exact.
+- **No double resample** — unpinned at 44.1 kHz the audio is resampled twice
+  (Windows' shared mixer takes each app → 44.1 kHz, then AOO 44.1 kHz → 48 kHz).
+  Pinning removes the second hop.
+- **Bandwidth** — upstream advertises up to **192 kHz**; unpinned, Windows could
+  pick 96/192 kHz as the mix format → 2–4× the UDP bandwidth for no benefit.
+
+Upstream's speaker endpoint advertises **8 kHz – 192 kHz (including 44.1 kHz)**.
+`apply_48k.ps1` edits `upstream\Source\Filters\speakerwavtable.h` so the speaker
+advertises **48 kHz only** (16/24/32-bit, stereo) — the supported-formats array,
+the modes array, and the KS data range are all narrowed to 48000 Hz, so Windows
+has exactly one rate to pick. The script is idempotent, backs up the original to
+`speakerwavtable.h.orig`, and throws if upstream's table shape changed (so it
+never silently leaves a non-48k format in).
 
 > You can confirm after install: **Settings → Sound → AudioPipe → Properties →
 > Advanced** should offer only 48000 Hz formats.

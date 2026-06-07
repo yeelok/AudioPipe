@@ -102,9 +102,9 @@ low-latency tuning belongs on the real wired link. See [docs/plan.md](docs/plan.
 
 **M5–M7 — running end-to-end over the LAN, with operational logging and auto-start.**
 
-- **M4 built & tested on Windows** (VS 2022/MSVC, vcpkg `soxr`): one include-order fix and the
-  sender compiles; `core` 25/25 tests pass; the WASAPI-loopback → §7 → UDP path is verified on
-  the wire, and §5.7 resilience (no crash / recovers when the receiver is down) holds.
+- **M4 built & tested on Windows** (VS 2022/MSVC) — *for the original pre-AOO sender*: the
+  WASAPI-loopback → UDP path was verified on the wire and §5.7 resilience held. The AOO-based
+  sender rewrite has not yet been re-built on Windows (see the AOO note above).
 - **M5 — real Windows → macOS link works**, loss-free, audible on the Mac. Latency: on **Wi-Fi**
   the network alone is ~18 ms one-way with ~17 ms jitter, so the ≤20 ms target (a **wired**-LAN
   spec, §9) is not met over Wi-Fi — the pipeline itself sits at ~9 ms on a clean link. **Use
