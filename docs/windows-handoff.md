@@ -2,9 +2,10 @@
 
 You're picking up AudioPipe on the **Windows PC**. A previous session migrated the
 project's transport to the **AOO** library (`AooSource`/`AooSink`) and validated
-the **macOS** half end to end. The **Windows half has not been compiled since the
-migration** — building and validating it is the job now. This is the project's
-only fully-untested surface.
+the **macOS** half end to end. The **Windows sender + tests now build and are
+locally validated** on this PC (Part A below — done 2026-06-08; the build fixes + a
+1 ms-timer overflow fix are in `main`). What remains: a real **Windows→Mac** link,
+the **`driver-win`** device (Part B), and the wired ≤20 ms + 2-hour acceptance (Part C).
 
 ## Read these first
 1. `docs/windows-bringup.md` — the step-by-step build/validate checklist (do this).
@@ -19,8 +20,8 @@ only fully-untested surface.
 - **Gone:** the hand-rolled packet/jitter/drift modules, **libsoxr**, vcpkg, and
   the old `loopback_harness`/`drift_sim`/`udp_send` tools.
 - **Sender** (`sender/sender_app.cpp`): WASAPI loopback capture → `AooSource` →
-  UDP via Winsock. Written to mirror the validated macOS usage, but **never
-  compiled on Windows** — expect build fixes.
+  UDP via Winsock. **Now compiles and runs on Windows** (the build fixes + a
+  1 ms-timer overflow fix are in `main` — see "Trouble spots" below).
 - **Driver** (`driver-win/`): `apply_48k.ps1` pins the virtual output to 48 kHz.
   Now **recommended, not required** — the AOO sink resamples any source rate, so
   a non-48 kHz endpoint no longer starves the device.
@@ -61,15 +62,22 @@ a pessimistic, jittery proxy.
 - Receiver must be running: `build/receiver/audiopipe_receiver --config config/receiver.json`.
 - UDP **4010** must be allowed through the macOS firewall.
 
-## Known likely-trouble spots (already hit / suspected)
-- `sender/sender_app.cpp` is untested MSVC code — expect compile fixes.
-  - `AooSendFunc` takes **6** params; the last is `AooFlag` (the send callback's
-    signature must match exactly).
-  - `<winsock2.h>` must be included **before** `<windows.h>` (already ordered so).
-  - `sendto`/`recvfrom` use `SOCKET` + `char*` + `int` on Winsock (cast from
-    `AooByte*`).
-- AOO builds on Windows/MSVC (SonoBus ships it there), but if CMake/FetchContent
-  hiccups, look there first.
+## Trouble spots (fixed 2026-06-08, in `main`)
+- **Send-buffer overflow → dropouts (the important one).** At Windows' default
+  ~15.6 ms timer granularity the capture poll-loop (`Sleep`) and the net-thread
+  drain (`recvfrom` timeout) fired too coarsely, so WASAPI bursts overran AOO's
+  ~25 ms send queue — a flood of `AooSource: send buffer overflow`. Fix: request
+  1 ms resolution via `timeBeginPeriod` (RAII guard, link `winmm`) + drop the drain
+  timeout 5 ms → 2 ms. Result: 0 overflows, steady 500 blocks/s, holds under full
+  CPU load.
+- **MSVC build fixes:** `AooFormatPcm_init` takes an `AooInt32` rate (not the
+  `AooSampleRate` double that `setup()` uses); the cross-platform
+  `tests/test_aoo_loopback.cpp` needed winsock2/ws2tcpip (+`NOMINMAX`, `WSAStartup`,
+  link `ws2_32`) and a local `kPi` (MSVC's `<cmath>` has no `M_PI`).
+  `wasapi_capture.cpp`'s `propkeydef.h` ordering fix was already in place. The
+  `AooSendFunc` 6-param signature, `<winsock2.h>`-before-`<windows.h>` order, and
+  `SOCKET`/`char*` casts were all fine as written.
+- AOO builds clean on Windows/MSVC via FetchContent (no CMake hiccups seen).
 - If the sender exits with *"device mix format is not 32-bit float"*: the shared
   mix format must be float (it is by default) — don't use exclusive mode.
 
@@ -81,8 +89,11 @@ a pessimistic, jittery proxy.
 - `aoo: buffer UNDERRUN`/`OVERRUN` events = dropouts.
 
 ## State at handoff
-- Branch `main`, all pushed. macOS: e2e clean at 48 k and 44.1 k, 11/11 unit tests,
-  a 20-min soak held 0 over/underruns with a rock-steady 48000 Hz measured rate.
+- Branch `main`. macOS: e2e clean at 48 k and 44.1 k, 11/11 unit tests, a 20-min
+  soak held 0 over/underruns with a rock-steady 48000 Hz measured rate.
+- **Windows: sender + tests build (VS18 / MSVC 19.51), 11/11 tests pass, and the
+  sender captures the default output at 48 k/float → AOO/UDP overflow-free**
+  (validated against a local UDP listener — real Mac e2e not yet run from this PC).
 - Latency note: the on-Mac loopback needed ~50 ms due to single-box scheduling
   jitter (not clock drift, not sender pacing — both were tested). Low-latency
   tuning toward ≤20 ms belongs on this real wired link. See `docs/plan.md`.

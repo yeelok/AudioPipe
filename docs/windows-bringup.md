@@ -1,10 +1,13 @@
 # Windows bring-up checklist (post-AOO)
 
 The AOO migration changed the Windows half (sender now uses `AooSource`; the
-driver is pinned to 48 kHz) but **none of it has been compiled on Windows yet** —
-this is the project's only fully-untested surface. Work through this on the
-Windows PC. Do **Part A first** (sender against your normal speakers) so you
-validate the network path before taking on the kernel-mode driver.
+driver is pinned to 48 kHz). **Part A (sender + tests) now builds and is locally
+validated on Windows** (done 2026-06-08 — the build fixes + a 1 ms-timer overflow
+fix are in `main`). This checklist is still the reference for a clean rebuild and
+for what has *not* been done from this PC: the **real Windows→Mac** run, **Part B**
+(the driver), and **Part C** acceptance. Do **Part A first** (sender against your
+normal speakers) so you validate the network path before taking on the kernel-mode
+driver.
 
 Legend: ☐ = do it, ✓ = expected result.
 

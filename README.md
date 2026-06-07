@@ -76,8 +76,9 @@ for the `latency_ms` tuning knob.
 The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS).
 **Picking this up on Windows? Start with [docs/windows-handoff.md](docs/windows-handoff.md)**
 (orientation for a fresh session), then the step-by-step
-[docs/windows-bringup.md](docs/windows-bringup.md) checklist. None of the Windows half has been
-built since the AOO migration.
+[docs/windows-bringup.md](docs/windows-bringup.md) checklist. The AOO-based **`sender/`** now builds
+and is locally validated on Windows (see Status); the **`driver-win/`** device is the piece that
+remains.
 
 - **`sender/`** — WASAPI shared-mode loopback capture → `AooSource` → UDP. AOO streams at the
   captured rate and the Mac sink resamples to 48 kHz, so a non-48 kHz endpoint no longer
@@ -95,7 +96,7 @@ before the driver fork is finished — set `device_name` accordingly in `config/
 replaced by the AOO library (`AooSource`/`AooSink`). This fixed the sample-rate-mismatch dropout
 bug (a non-48 kHz source is now resampled instead of starving the device) and added time-DLL
 drift correction + packet resend. On-Mac e2e is glitch-free (0 over/underruns) at the default
-`latency_ms=50` for both 48 kHz and 44.1 kHz sources; all 11 unit tests pass.
+`latency_ms=50` for both 48 kHz and 44.1 kHz sources; all 11 unit tests pass (macOS and Windows).
 
 The ≤20 ms target (§9) is the open follow-up. The on-Mac loopback needs ~50 ms because of
 **arrival-timing jitter on a single contended box** — the receiver's fill-ratio log shows the
@@ -107,9 +108,14 @@ belongs there. See [docs/plan.md](docs/plan.md).
 
 **M5–M7 — running end-to-end over the LAN, with operational logging and auto-start.**
 
-- **M4 built & tested on Windows** (VS 2022/MSVC) — *for the original pre-AOO sender*: the
-  WASAPI-loopback → UDP path was verified on the wire and §5.7 resilience held. The AOO-based
-  sender rewrite has not yet been re-built on Windows (see the AOO note above).
+- **M4 — AOO sender built & locally validated on Windows** (VS 2022-class MSVC 19.51): the AOO
+  sender and the in-process AOO loopback test now compile under MSVC (**11/11 tests pass on
+  Windows**) after cross-platform fixes. The sender captures the default output at 48 kHz/float
+  via WASAPI loopback and streams AOO/UDP **overflow-free** — it needed a 1 ms multimedia-timer
+  request (`timeBeginPeriod`) so the capture/drain loops don't overrun AOO's send buffer at
+  Windows' default ~15.6 ms timer granularity. Validated against a local UDP listener; **real
+  Windows→Mac e2e is the next step.** (The pre-AOO sender's on-wire path + §5.7 resilience were
+  verified earlier.)
 - **M5 — real Windows → macOS link works**, loss-free, audible on the Mac. Latency: on **Wi-Fi**
   the network alone is ~18 ms one-way with ~17 ms jitter, so the ≤20 ms target (a **wired**-LAN
   spec, §9) is not met over Wi-Fi — the pipeline itself sits at ~9 ms on a clean link. **Use
