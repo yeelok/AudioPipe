@@ -74,9 +74,10 @@ for the `latency_ms` tuning knob.
 ## Windows sender + device (M4)
 
 The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS).
-**First time? Follow [docs/windows-bringup.md](docs/windows-bringup.md)** — a step-by-step
-checklist for compiling and validating the AOO sender + driver (none of it has been built on
-Windows since the migration).
+**Picking this up on Windows? Start with [docs/windows-handoff.md](docs/windows-handoff.md)**
+(orientation for a fresh session), then the step-by-step
+[docs/windows-bringup.md](docs/windows-bringup.md) checklist. None of the Windows half has been
+built since the AOO migration.
 
 - **`sender/`** — WASAPI shared-mode loopback capture → `AooSource` → UDP. AOO streams at the
   captured rate and the Mac sink resamples to 48 kHz, so a non-48 kHz endpoint no longer
