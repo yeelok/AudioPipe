@@ -140,6 +140,23 @@ the package — it doesn't create a device node — so the script then runs
 > `signtool sign /fd SHA256 /a /n "AudioPipe Test" ...\virtualaudiodriver.cat`
 > (sign the `.cat`, which vouches for the `.sys`), then re-run the install.
 
+## 3b. Make the device persist across reboots (recommended)
+
+`trust_and_install.ps1` creates the device with **`devgen`**, whose software
+devices are **boot-scoped** — after a reboot the node becomes a `CM_PROB_PHANTOM`
+remnant and "AudioPipe" disappears from Sound (the driver package and cert
+survive; only the node is gone). To create a node that **persists across
+reboots**, run `install_persistent.ps1` instead — it removes any devgen/stale
+node and uses `devcon install` to create a root-enumerated device:
+
+```powershell
+.\install_persistent.ps1        # elevated; root-enumerated device, survives reboot
+```
+
+> Persistence still requires test-signing to stay on (the Test Mode watermark).
+> To set up the device **and** the sender Windows Service in one shot, use
+> [`../scripts/install_all.ps1`](../scripts/install_all.ps1).
+
 ## 4. Confirm + wire up the sender
 
 - **Settings → System → Sound** lists **AudioPipe** as an output device.
@@ -176,5 +193,6 @@ per-app-routable output literally named **AudioPipe**.
 | `apply_rename.ps1` | Rename the cloned driver's speaker endpoint to AudioPipe |
 | `apply_48k.ps1` | Pin the speaker endpoint to 48 kHz only (formats, modes, data range) |
 | `build.ps1` | Build Release/x64 via MSBuild (needs the WDK) |
-| `trust_and_install.ps1` | Trust the test cert + `pnputil` install (elevated) |
+| `trust_and_install.ps1` | Trust the test cert + `pnputil` install via `devgen` (elevated; node is **boot-scoped**) |
+| `install_persistent.ps1` | Same, but creates a **persistent** root device via `devcon` (survives reboot, elevated) |
 | `upstream/` | The cloned fork (gitignored; created by step 1) |
