@@ -142,9 +142,11 @@ int main(int argc, char** argv) {
     AooSource::Ptr source = AooSource::create(kSourceId);
     source->setup(ch, AooSampleRate(rate), AooInt32(block), 0);
     AooFormatPcm fmt;
-    AooFormatPcm_init(&fmt, ch, AooSampleRate(rate), AooInt32(block), kAooPcmFloat32);
+    AooFormatPcm_init(&fmt, ch, AooInt32(rate), AooInt32(block), kAooPcmFloat32); // PCM rate is AooInt32
     source->setFormat(fmt.header);
     source->setResendBufferSize(0.05);     // keep 50 ms of history for resends
+    source->setBufferSize(0.1);            // 100 ms send queue (AOO default 25 ms): burst headroom so
+                                           // process() can't overflow -> add_xrun -> sink "block xrun"
     source->setDynamicResampling(kAooTrue); // measure our real send rate for the sink's DLL
     AooEndpoint ep{ &dst, sizeof(dst), kSinkId };
     source->addSink(ep, kAooTrue);

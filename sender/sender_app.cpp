@@ -142,6 +142,13 @@ int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
     AooFormatPcm_init(&fmt, ch, AooInt32(rate), block, kAooPcmFloat32); // PCM format rate is AooInt32 (setup() above takes the double AooSampleRate)
     source->setFormat(fmt.header);
     source->setResendBufferSize(0.05);        // honor sink resend requests
+    source->setBufferSize(0.1);               // 100 ms outgoing send queue (AOO default is 25 ms).
+                                              // A WASAPI/scheduling burst that overruns this queue
+                                              // makes process() return kAooErrorOverflow AND calls
+                                              // add_xrun() -- which the sink reports as "block xrun".
+                                              // This is headroom only (drains promptly), no added
+                                              // latency. Root-cause fix for the overflow/xrun; the
+                                              // self-heal stream-restart below stays as a safety net.
     source->setDynamicResampling(kAooTrue);    // measure the WASAPI capture clock
     AooEndpoint ep{ &dst, sizeof(dst), kSinkId };
     source->addSink(ep, kAooTrue);
