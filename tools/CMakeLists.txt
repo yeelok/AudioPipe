@@ -14,7 +14,15 @@ target_include_directories(tools_wav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(aoo_send aoo_send.cpp)
 target_link_libraries(aoo_send PRIVATE tools_wav Aoo::aoo Threads::Threads)
 
-target_compile_features(aoo_send PRIVATE cxx_std_17)
-if(NOT MSVC)
-    target_compile_options(aoo_send PRIVATE -Wall -Wextra)
-endif()
+# pipeline_check: run a WAV through the full AOO pipeline offline (in-process
+# AooSource -> AooSink, synthetic clock) with drop/reorder/drift injection and a
+# listenable output WAV. No sockets/hardware.
+add_executable(pipeline_check pipeline_check.cpp)
+target_link_libraries(pipeline_check PRIVATE tools_wav Aoo::aoo)
+
+foreach(t aoo_send pipeline_check)
+    target_compile_features(${t} PRIVATE cxx_std_17)
+    if(NOT MSVC)
+        target_compile_options(${t} PRIVATE -Wall -Wextra)
+    endif()
+endforeach()
