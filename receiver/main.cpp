@@ -159,6 +159,17 @@ AooId            g_src_id   = 0;
 bool             g_have_src = false;
 double           g_fill_min = 1e9, g_fill_max = -1e9;
 
+// Forward AOO's internal log (warnings/errors, e.g. "send buffer overflow")
+// into our Logger. AOO's default sink is stderr; routing it here keeps those
+// messages in the log file alongside our own. Registered via AooSettings below.
+void AOO_CALL aoo_log_forward(AooLogLevel level, const AooChar* msg) {
+    if (!g_log || !msg) return;
+    const char* lvl = (level == kAooLogLevelError)   ? "error"
+                    : (level == kAooLogLevelWarning) ? "warn"
+                                                     : "info";
+    g_log->info(std::string("aoo[") + lvl + "]: " + msg);
+}
+
 // AOO event handler (poll mode; invoked from the net thread via pollEvents).
 void AOO_CALL on_event(void* /*user*/, const AooEvent* event, AooThreadLevel) {
     switch (event->type) {
@@ -209,7 +220,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "AudioPipe receiver (AOO): port %u -> device '%s'\n", cfg.listen_port,
                  cfg.device_name.c_str());
 
-    if (aoo_initialize(nullptr) != kAooOk) {
+    AooSettings settings;                 // C++ default ctor fills structSize + nulls
+    settings.logFunc = aoo_log_forward;   // route AOO's internal log into our Logger
+    if (aoo_initialize(&settings) != kAooOk) {
         std::fprintf(stderr, "aoo_initialize failed\n");
         return 1;
     }

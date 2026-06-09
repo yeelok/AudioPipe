@@ -46,6 +46,8 @@ any `buffer UNDERRUN`/`OVERRUN` events (your dropout signal), and a ~5 s
 heartbeat: `buffer fill swing <min>..<max>  measured device rate <Hz>`. A swing
 that reaches ~1.00 means the jitter buffer is overflowing — raise `latency_ms`;
 the measured device rate exposes any real clock drift (it should sit at ~48000).
+AOO's own internal warnings/errors are routed into this log too, prefixed
+`aoo[warn]` / `aoo[error]` (via `AooSettings.logFunc`).
 Select **AudioPipe** as the input in QuickTime / System Settings → Sound to hear it.
 
 ## Auto-start at boot (§6.4)

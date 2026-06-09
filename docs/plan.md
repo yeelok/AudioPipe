@@ -2,6 +2,14 @@
 
 > Companion to [spec.md](../spec.md). This is the *how*; the spec is the *what*.
 
+> **⚠️ Architecture superseded — read the addendum first.** The architecture
+> diagram, repo layout, and milestones **M0–M7** below describe the *original*
+> hand-rolled core (a §7 packet codec, jitter buffer, PI drift controller, and a
+> libsoxr resampler). Post-M7 the entire transport was replaced by the **AOO**
+> library. The current design — and the block-xrun / latency / soak findings —
+> live in **“Addendum: migration to the AOO library”** at the end of this file.
+> Everything above the addendum is kept verbatim as a historical record.
+
 ## Guiding principle
 
 Every bug-prone algorithm lives in a **portable C++ `/core`** library and is testable on
@@ -254,3 +262,45 @@ two halves), and the LAN adds only bounded jitter — exactly the regime AOO's
 on the real wired Windows→Mac link**, not the on-Mac loopback. If a fair on-Mac
 proxy is ever needed, the lever is receiver-side (e.g. raise the net thread's
 scheduling priority / reduce its per-packet work), not the sender.
+
+### Post-handoff refinements (Windows bring-up + block-xrun)
+
+Once the sender was first built on Windows, a few things landed:
+
+- **Windows build + 1 ms timer.** MSVC fixes (winsock2-before-windows.h, the
+  `AooFormatPcm_init` `AooInt32` rate, winsock guards in the loopback test) plus
+  `timeBeginPeriod(1)` — at Windows' default ~15.6 ms timer granularity the
+  capture/drain loops were too coarse and overran AOO's send buffer.
+
+- **Send-buffer overflow == the "block xrun".** The receiver's
+  `kAooEventBlockXRun` is the *downstream* symptom of the **sender's** send queue
+  overflowing: `AooSource::process()` calls `add_xrun()` on overflow
+  (`aoo/src/source.cpp`), which the sink reports as a block xrun. The source's
+  outgoing queue defaults to `AOO_SOURCE_BUFFER_SIZE = 25 ms` and we never raised
+  it. **Fix: `source->setBufferSize(0.1)`** (100 ms headroom; drains promptly, no
+  added latency) in the sender and `aoo_send`. This is a config change, **not an
+  AOO fork** — AOO's own comment at the overflow site ("clients are still
+  supposed to call send() to drain the buffer") confirms overflow is transient
+  backpressure by design. The sender's self-heal stream-restart stays as a safety
+  net. (If a genuine AOO bug ever surfaces, prefer an upstream issue/PR — BSD,
+  actively maintained — or a FetchContent patch file, over a private fork.)
+
+- **AOO log routing.** `aoo_initialize` now gets an `AooSettings.logFunc` that
+  forwards AOO's internal warnings/errors (e.g. `send buffer overflow`) into our
+  `Logger`. AOO's default sink is stderr, which is lost for the headless Windows
+  service; this keeps those messages in the log file.
+
+- **`tools/pipeline_check` rewritten on AOO.** The old one was built on the
+  removed `jitter_buffer`/`drift_control`/`resampler` modules (dead, uncompilable).
+  It's now an in-process `AooSource → AooSink` pass (synthetic clock) that runs a
+  real WAV through the full pipeline offline and writes a listenable output WAV,
+  with drop/reorder/drift injection + AOO event tallies. Loss/reorder/cross-rate
+  are faithful (2 % loss → AOO resend recovers ~all packets; 44.1k→48k preserves
+  energy); clock-drift is understated by the single-process clock (same caveat as
+  the unit test).
+
+**On the AOO examples:** they're minimal `AooClient` demos that use *fewer*
+controls than we do (`setup`/`setEventHandler`/`startStream`/`setLatency`/
+`inviteSource`). We already use more of the API (dynamic resampling, resend,
+buffer sizing). The only thing worth adopting from them was wiring `logFunc` (the
+examples don't, but `AooSettings` exposes it) — now done.

@@ -81,6 +81,19 @@ a pessimistic, jittery proxy.
 - If the sender exits with *"device mix format is not 32-bit float"*: the shared
   mix format must be float (it is by default) — don't use exclusive mode.
 
+### Follow-up fixes (post-handoff, also in `main`)
+- **Send-buffer overflow / "block xrun" — root cause + config fix.** The 1 ms
+  timer above stopped most overflows; the underlying cause is that AOO's source
+  send queue defaults to **25 ms** (`AOO_SOURCE_BUFFER_SIZE`) and we never raised
+  it, so a burst overruns it → `process()` returns `kAooErrorOverflow` and calls
+  `add_xrun()`, which the sink reports as `block xrun`. Fix:
+  `source->setBufferSize(0.1)` (100 ms headroom, drains promptly, no added
+  latency). **Not an AOO fork** — overflow is transient backpressure by AOO's own
+  design. The self-heal stream-restart stays as a safety net.
+- **AOO log routing.** `aoo_initialize` now installs an `AooSettings.logFunc` that
+  forwards AOO's internal warnings/errors into our `Logger` (prefixed
+  `aoo[warn]`/`aoo[error]`) — important for the service, which has no stderr.
+
 ## Reading the logs (success vs trouble)
 - Receiver heartbeat: `buffer fill swing <min>..<max>  measured device rate <Hz>`.
   - fill swing reaching `..1.00` → overruns → raise `latency_ms` in `config/receiver.json`.

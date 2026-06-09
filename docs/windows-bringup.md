@@ -118,6 +118,7 @@ Now build the per-app-routable virtual speaker. Full detail in
 |---|---|
 | CMake configure fails fetching AOO | no network/git on the build box |
 | Sender: "device mix format is not 32-bit float" | endpoint in exclusive mode / odd format |
+| Sender log: `aoo[warn]: ... send buffer overflow` / receiver `block xrun` | bursts overran the source send queue — already mitigated by the 1 ms timer + `source->setBufferSize(0.1)`; if it persists, raise the buffer further |
 | No audio, receiver shows no `stream start` | wrong `dest_ip`, or UDP 4010 blocked by the Mac firewall |
 | Receiver fill swing pinned at `..1.00` | latency too low for the link → raise `latency_ms` |
 | `measured device rate` far from 48000 | a real clock problem — investigate before tuning latency |

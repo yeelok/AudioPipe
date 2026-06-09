@@ -69,12 +69,25 @@ void AOO_CALL on_event(void*, const AooEvent* e, AooThreadLevel) {
     }
 }
 
+// Forward AOO's internal log (warnings/errors, e.g. "send buffer overflow") into
+// our Logger. Critical here: a Windows service has no console, so AOO's default
+// stderr sink is lost -- this keeps those messages in the log file.
+void AOO_CALL aoo_log_forward(AooLogLevel level, const AooChar* msg) {
+    if (!g_log || !msg) return;
+    const char* lvl = (level == kAooLogLevelError)   ? "error"
+                    : (level == kAooLogLevelWarning) ? "warn"
+                                                     : "info";
+    g_log->info(std::string("aoo[") + lvl + "]: " + msg);
+}
+
 } // namespace
 
 int run_sender(const SenderConfig& cfg, std::atomic<bool>& stop, Logger& log) {
     g_log = &log;
     TimerResolutionGuard timer_res; // 1 ms timer resolution (see struct above)
-    if (aoo_initialize(nullptr) != kAooOk) {
+    AooSettings settings;                 // C++ default ctor fills structSize + nulls
+    settings.logFunc = aoo_log_forward;   // route AOO's log into our Logger (service has no stderr)
+    if (aoo_initialize(&settings) != kAooOk) {
         log.info("sender: aoo_initialize failed");
         return 1;
     }

@@ -74,7 +74,9 @@ sc start AudioPipeSender
 
 The service is `start= auto` (boot, no login) and is configured via
 `sc failure` to restart 5 s after a crash, up to 3 times/day (§10). Logs go to
-the `log_file` path in the config. To remove it:
+the `log_file` path in the config — including AOO's own internal warnings/errors
+(prefixed `aoo[warn]`/`aoo[error]`), which are routed into the log via
+`AooSettings.logFunc` since a service has no console to print stderr to. To remove it:
 
 ```powershell
 .\scripts\uninstall_sender_service.ps1 -Purge   # stop, delete, remove C:\AudioPipe

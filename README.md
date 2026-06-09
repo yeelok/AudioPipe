@@ -29,7 +29,7 @@ fixed 48 kHz/float32 format constants.
 |---|---|
 | `core/` | Config, logging, format constants (C++17) |
 | `tests/` | Catch2 unit tests (incl. an in-process AOO loopback) |
-| `tools/` | `aoo_send` — real-time WAV→AooSource sender (Mac test stand-in) |
+| `tools/` | `aoo_send` (real-time WAV→AooSource UDP sender, Mac test stand-in) + `pipeline_check` (offline full-pipeline WAV→WAV with loss/reorder/drift injection) |
 | `receiver/` | macOS receiver process (AooSink → CoreAudio) |
 | `driver-mac/` | BlackHole fork (virtual input device) |
 | `sender/` | Windows sender service (WASAPI → AooSource) |
@@ -129,6 +129,12 @@ replaced by the AOO library (`AooSource`/`AooSink`). This fixed the sample-rate-
 bug (a non-48 kHz source is now resampled instead of starving the device) and added time-DLL
 drift correction + packet resend. On-Mac e2e is glitch-free (0 over/underruns) at the default
 `latency_ms=50` for both 48 kHz and 44.1 kHz sources; all 11 unit tests pass (macOS and Windows).
+
+A later refinement raised the AOO **source** send buffer (25 ms default → 100 ms, via
+`source->setBufferSize`) so WASAPI/scheduling bursts can't overflow it — that overflow was the
+root cause behind the sender's `send buffer overflow` and the receiver's `block xrun` (AOO calls
+`add_xrun()` on overflow). AOO's own internal warnings are now routed into our log files (via
+`AooSettings.logFunc`), so they're visible even for the headless Windows service.
 
 The ≤20 ms target (§9) is the open follow-up. The on-Mac loopback needs ~50 ms because of
 **arrival-timing jitter on a single contended box** — the receiver's fill-ratio log shows the
