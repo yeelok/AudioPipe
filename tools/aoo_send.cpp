@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
     }
 
     // UDP socket + destination endpoint.
-    const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) { std::perror("socket"); return 1; }
     timeval tv{}; tv.tv_usec = 2000; // 2 ms: flush outgoing audio promptly
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
     std::thread net([&] {
         std::vector<AooByte> buf(AOO_MAX_PACKET_SIZE);
         while (!net_done.load(std::memory_order_acquire)) {
-            source->send(udp_send, const_cast<int*>(&fd));
+            source->send(udp_send, &fd);
             sockaddr_storage src{};
             socklen_t        srclen = sizeof(src);
             const ssize_t n = ::recvfrom(fd, buf.data(), buf.size(), 0,

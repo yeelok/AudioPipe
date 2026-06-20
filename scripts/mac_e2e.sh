@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 RECV=build/receiver/audiopipe_receiver
-SEND=build/tools/udp_send
+SEND=build/tools/aoo_send
 CFG=config/receiver.json
 PORT="${AUDIOPIPE_PORT:-4010}"
 IN="${1:-}"
