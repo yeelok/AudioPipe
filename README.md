@@ -1,57 +1,36 @@
 # AudioPipe
 
-Low-latency, bit-transparent audio link: **Windows PC → macOS** over a local network
-(UDP, raw PCM, 48 kHz / 32-bit float / stereo).
+Low-latency, bit-transparent audio link: **Windows PC → macOS** over your LAN
+(UDP · raw PCM · 48 kHz / 32-bit float / stereo). Route an app's audio on Windows
+into the **AudioPipe** output device; hear it on the Mac as an **AudioPipe** input
+("microphone") that any app — Zoom, OBS, QuickTime — can select.
 
-- Requirements: [spec.md](spec.md)
-- Milestone plan & design decisions: [docs/plan.md](docs/plan.md)
+**Status:** the macOS receive side is built and validated (end-to-end clean, 11/11
+unit tests, a 20-minute soak with zero drops). The Windows sender builds and runs
+locally; the **real two-machine link**, the **≤20 ms wired-latency** check, and the
+**2-hour soak** are the open acceptance items — see [Status & roadmap](#status--roadmap).
 
-## Architecture
+## How it works
 
-The low-latency send/receive engine is the [**AOO**](https://git.iem.at/aoo/aoo)
-(Audio over OSC) library — it owns the UDP wire protocol, jitter buffer, time-DLL
-clock-drift correction, **dynamic resampling** (so source and sink can run at
-different/​drifting rates), and packet resend. The platform halves are thin
-adapters around AOO's bare `AooSource`/`AooSink` (we provide the sockets, the
-NET/discovery layer is off): a Windows **sender** (WASAPI loopback capture →
-`AooSource` → UDP) and a macOS **receiver** (UDP → `AooSink` → BlackHole-fork
-virtual input device). A small **`core/`** library holds config, logging, and the
-fixed 48 kHz/float32 format constants.
+The send/receive engine is the [**AOO**](https://git.iem.at/aoo/aoo) (Audio over
+OSC) library — it owns the UDP wire protocol, jitter buffer, time-DLL clock-drift
+correction, **dynamic resampling** (source and sink may run at different / drifting
+rates), and packet resend. The platform halves are thin adapters around AOO's bare
+`AooSource` / `AooSink` (we own the sockets; AOO's discovery layer is off):
 
-> AOO is PCM (bit-transparent, Opus off) and float32, fetched at configure time
-> via CMake `FetchContent` (Standard Improved BSD license). See
-> [docs/plan.md](docs/plan.md) for why AOO replaced the original hand-rolled
-> packet/jitter/drift modules.
-
-## Repo layout
-
-| Path | What |
-|---|---|
-| `core/` | Config, logging, format constants (C++17) |
-| `tests/` | Catch2 unit tests (incl. an in-process AOO loopback) |
-| `tools/` | `aoo_send` (real-time WAV→AooSource UDP sender, Mac test stand-in) + `pipeline_check` (offline full-pipeline WAV→WAV with loss/reorder/drift injection) |
-| `receiver/` | macOS receiver process (AooSink → CoreAudio) |
-| `driver-mac/` | BlackHole fork (virtual input device) |
-| `sender/` | Windows sender service (WASAPI → AooSource) |
-| `driver-win/` | Virtual-Audio-Driver fork (virtual output device, 48 kHz) |
-| `config/` | Sample `sender.json` / `receiver.json` |
-
-## Build (core + tests)
-
-Requires **CMake ≥ 3.20**, a **C++17** compiler, and network access on first
-configure (CMake fetches nlohmann/json, Catch2, and AOO). No system audio libs
-are needed — AOO is built from source into the binaries.
-
-```sh
-cmake -S . -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
 ```
+Windows app ─▶ AudioPipe output device (driver-win) ─▶ sender: WASAPI loopback ─▶ AooSource
+     └─ UDP / LAN ─▶ receiver: AooSink ─▶ AudioPipe input device (driver-mac) ─▶ Mac app
+```
+
+PCM float32 with Opus off → **bit-transparent**. AOO is fetched at configure time
+via CMake `FetchContent` (Standard Improved BSD). A small `core/` holds config,
+logging, and the 48 kHz / float32 constants.
 
 ## Quick start — build & install (one command per machine)
 
-Two orchestrator scripts do the whole platform setup (build → driver → install)
-by calling the component scripts under the hood. Run each on its own machine.
+Run each on its own machine; each script builds, then installs, by calling the
+component scripts under the hood.
 
 **macOS — the receive side:**
 
@@ -66,141 +45,78 @@ Flags: `--tests`, `--no-driver`, `--no-autostart`, `--daemon`, `--uninstall`.
 **Windows — the send side (elevated PowerShell):**
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force   # only if scripts are blocked
+Set-ExecutionPolicy -Scope Process Bypass -Force   # if .ps1 is blocked — this window only, reverts on close
 .\scripts\setup_windows.ps1 -Start
 ```
 
 Builds the sender, builds the **AudioPipe** virtual output driver (needs the WDK),
-and installs the persistent device + the auto-start sender Service. The driver's
-test-signed `.sys` needs Test Mode, so the **first** run enables test-signing and
-asks you to **reboot, then re-run** `.\scripts\setup_windows.ps1 -SkipBuild -Start`.
+and installs the persistent device + auto-start sender Service. The test-signed
+driver only loads in **Test Mode**, which needs one reboot — so the **first** run
+turns on test-signing and asks you to **reboot, then re-run**
+`.\scripts\setup_windows.ps1 -SkipBuild -Start`.
 Flags: `-SkipBuild`, `-SkipDriver`, `-Start`, `-Uninstall`.
 
 Then set the Windows `config\sender.json` `dest_ip` to the Mac's IP, pick
 **AudioPipe** as the input on the Mac, and route an app to the **AudioPipe**
-output on Windows. The sections below document what each step does and the manual
-equivalents.
+output on Windows. (Make sure the receiver's UDP port — default 4010 — is open on
+the Mac firewall.)
 
-## macOS device + receiver
+## Build & test (dev, no install)
 
-The **AudioPipe** virtual input device is a BlackHole fork in `driver-mac/` (build-time
-customized to AudioPipe / 2ch / 48 kHz). The **receiver** (`receiver/`) listens for UDP,
-runs the AOO sink (jitter buffer → drift-corrected dynamic resampling), and plays into that
-device via a CoreAudio HAL output unit; apps select "AudioPipe" as a mic.
-`scripts/setup_macos.sh` (above) does the build + device install + auto-start in
-one go — these are the manual equivalents:
+Requires **CMake ≥ 3.20** and a **C++17** compiler; the first configure fetches
+nlohmann/json, Catch2 and AOO (needs network + `git`). No system audio libs.
 
 ```sh
-# 1. Build + install the device (sudo restarts coreaudiod):
-(cd driver-mac && ./build_driver.sh && sudo ./install.sh)
-
-# 2. End-to-end test on this Mac (sine, or pass a WAV); then select
-#    "AudioPipe" as input in QuickTime / System Settings to hear it:
-scripts/mac_e2e.sh
-scripts/mac_e2e.sh song.wav
+cmake -S . -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-`scripts/mac_e2e.sh` runs the receiver and `aoo_send` (a real-time WAV→`AooSource` sender that
-stands in for the Windows half) on one machine. `aoo_send` streams at the WAV's own rate, so it
-also exercises AOO's cross-rate resampling (e.g. a 44.1 kHz file → the 48 kHz device). See
-[driver-mac/README.md](driver-mac/README.md) for signing notes and [receiver/README.md](receiver/README.md)
-for the `latency_ms` tuning knob.
+On-Mac end-to-end check (no Windows box needed — streams a WAV/sine into the
+installed device; pick **AudioPipe** as input to hear it):
 
-## Windows sender + device (M4)
-
-The Windows half (build/test on the **Windows PC** — needs MSVC; not buildable on macOS).
-**Picking this up on Windows? Start with [docs/windows-handoff.md](docs/windows-handoff.md)**
-(orientation for a fresh session), then the step-by-step
-[docs/windows-bringup.md](docs/windows-bringup.md) checklist. The AOO-based **`sender/`** now builds
-and is locally validated on Windows (see Status); the **`driver-win/`** device is the piece that
-remains.
-
-- **`sender/`** — WASAPI shared-mode loopback capture → `AooSource` → UDP. AOO streams at the
-  captured rate and the Mac sink resamples to 48 kHz, so a non-48 kHz endpoint no longer
-  glitches. Runs as a Windows Service (§5.6) or `--console`. See [sender/README.md](sender/README.md).
-- **`driver-win/`** — fork of [Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver)
-  (Sysvad-based) as the virtual **output** device named "AudioPipe". Built with the WDK +
-  test-signing. See [driver-win/README.md](driver-win/README.md).
-
-The sender can capture the default output (or any virtual cable) for incremental testing
-before the driver fork is finished — set `device_name` accordingly in `config/sender.json`.
-
-## Install (Windows): device + sender service
-
-`scripts\setup_windows.ps1` (the Quick start above) builds **and** installs in one command.
-If you've already built the sender and driver and only want the **install** step — the
-**AudioPipe** virtual output device (persistent) **and** the sender as an auto-start,
-crash-restarting Windows Service — run the install-only orchestrator from an **elevated**
-PowerShell (Win+X → *Terminal (Admin)*):
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force   # see note below
-.\scripts\install_all.ps1 -Start
+```sh
+scripts/mac_e2e.sh [song.wav]
 ```
 
-`install_all.ps1` is a thin orchestrator over `driver-win\install_persistent.ps1` (trust the test
-cert + install the driver as a **persistent root device** that survives reboots) and
-`scripts\install_sender_service.ps1` (deploy the exe + `sender.json` to `C:\AudioPipe`, register the
-`AudioPipeSender` service). It only **installs** — build the sender (see **Build** above) and the
-driver ([driver-win/README.md](driver-win/README.md)) first. Use `-SkipDriver` to (re)install just
-the service after rebuilding the sender; remove everything with `.\scripts\uninstall_sender_service.ps1 -Purge`.
+## Components
 
-> **Why `Set-ExecutionPolicy -Scope Process Bypass -Force` first?** Windows blocks unsigned `.ps1`
-> files by default (execution policy `Restricted`), so the script won't run otherwise. `-Scope Process`
-> lifts the block **for the current window only** and reverts when you close it — it changes nothing
-> machine- or user-wide, and it's *not* a security hole (the policy is a guardrail against
-> accidentally running untrusted scripts, not a sandbox). It's a **separate gate from elevation**: the
-> install needs an **admin** window (it touches a driver + a Windows service) **and** the policy bypass.
-> One-shot alternative that saves neither setting: `powershell -ExecutionPolicy Bypass -File .\scripts\install_all.ps1 -Start` (still launch it elevated).
+| Path | What |
+|---|---|
+| `core/` | Config, logging, 48 kHz / float32 constants (C++17) |
+| `tests/` | Catch2 unit tests, incl. an in-process `AooSource → AooSink` loopback |
+| `tools/` | `aoo_send` (real-time WAV → `AooSource` UDP sender, Mac stand-in for the Windows half); `pipeline_check` (offline full-pipeline WAV → WAV with loss/reorder/drift injection) |
+| `receiver/` | macOS receiver: UDP → `AooSink` → CoreAudio — [readme](receiver/README.md) (incl. the `latency_ms` knob) |
+| `driver-mac/` | **AudioPipe** virtual input device — BlackHole fork, 2ch/48 kHz — [readme](driver-mac/README.md) |
+| `sender/` | Windows sender: WASAPI loopback → `AooSource` → UDP; runs as a Service — [readme](sender/README.md) |
+| `driver-win/` | **AudioPipe** virtual output device — Virtual-Audio-Driver fork, pinned to 48 kHz; WDK + test-signing — [readme](driver-win/README.md) |
+| `scripts/` | `setup_macos.sh` / `setup_windows.ps1` (one-shot) + the install/uninstall component scripts |
+| `config/` | Sample `sender.json` / `receiver.json` |
 
-**Prerequisites the installer assumes:** test-signing must be on — a one-time `bcdedit /set testsigning on`
-+ reboot, since the driver `.sys` is test-signed (see [driver-win/README.md](driver-win/README.md)). And
-the service runs as **LocalSystem in session 0**, where WASAPI loopback may not reach session-bound
-audio; if the Mac gets no sound, verify in your user session first with
-`build\sender\audiopipe_sender.exe --console --config config\sender.json`.
+First time building on Windows? Work through [docs/windows-bringup.md](docs/windows-bringup.md).
+For incremental testing before the driver is built, the sender can capture your
+**default output** — set `device_name: ""` in `config/sender.json`.
 
-## Status
+## Status & roadmap
 
-**Transport migrated to AOO.** The original hand-rolled packet/jitter/drift/resampler core was
-replaced by the AOO library (`AooSource`/`AooSink`). This fixed the sample-rate-mismatch dropout
-bug (a non-48 kHz source is now resampled instead of starving the device) and added time-DLL
-drift correction + packet resend. On-Mac e2e is glitch-free (0 over/underruns) at the default
-`latency_ms=50` for both 48 kHz and 44.1 kHz sources; all 11 unit tests pass (macOS and Windows).
+**Done & validated**
+- AOO transport on both halves; the macOS receiver is end-to-end clean at the
+  default `latency_ms=50` for **48 kHz and 44.1 kHz** sources — AOO resamples, so
+  the old sample-rate-mismatch dropout is gone.
+- 11/11 unit tests (macOS and Windows/MSVC); a 20-minute on-Mac soak with **0
+  over/underruns** and a rock-steady measured device rate.
+- The Windows sender builds and streams **overflow-free** to a local listener.
 
-A later refinement raised the AOO **source** send buffer (25 ms default → 100 ms, via
-`source->setBufferSize`) so WASAPI/scheduling bursts can't overflow it — that overflow was the
-root cause behind the sender's `send buffer overflow` and the receiver's `block xrun` (AOO calls
-`add_xrun()` on overflow). AOO's own internal warnings are now routed into our log files (via
-`AooSettings.logFunc`), so they're visible even for the headless Windows service.
+**Open acceptance items**
+- **Real two-machine Windows → Mac link** on the AOO build (so far: on-Mac and
+  local-listener runs only).
+- **≤20 ms on wired Ethernet (§9):** the on-Mac loopback needs ~50 ms purely from
+  single-box scheduling jitter (the measured device rate is dead-on 48 kHz — not
+  clock drift). This belongs on the real wired link.
+- **2-hour soak** end to end (§8).
+- Per-app routing uses the `driver-win` device — install it to route a single app
+  instead of capturing the default output.
 
-The ≤20 ms target (§9) is the open follow-up. The on-Mac loopback needs ~50 ms because of
-**arrival-timing jitter on a single contended box** — the receiver's fill-ratio log shows the
-buffer swinging 0.04..1.00 at low latency while the **measured device rate stays dead-on 48000 Hz
-(no drift)**; at 50 ms it settles to a tight 0.42..0.44. It's not the sender's pacing (making the
-sender burst-free didn't help — the jitter is receiver/scheduling-side). On the real link the two
-halves run on separate machines with a hardware-clocked WASAPI capture, so low-latency tuning
-belongs there. See [docs/plan.md](docs/plan.md).
-
-**M5–M7 — running end-to-end over the LAN, with operational logging and auto-start.**
-
-- **M4 — AOO sender built & locally validated on Windows** (VS 2022-class MSVC 19.51): the AOO
-  sender and the in-process AOO loopback test now compile under MSVC (**11/11 tests pass on
-  Windows**) after cross-platform fixes. The sender captures the default output at 48 kHz/float
-  via WASAPI loopback and streams AOO/UDP **overflow-free** — it needed a 1 ms multimedia-timer
-  request (`timeBeginPeriod`) so the capture/drain loops don't overrun AOO's send buffer at
-  Windows' default ~15.6 ms timer granularity. Validated against a local UDP listener; **real
-  Windows→Mac e2e is the next step.** (The pre-AOO sender's on-wire path + §5.7 resilience were
-  verified earlier.)
-- **M5 — real Windows → macOS link works**, loss-free, audible on the Mac. Latency: on **Wi-Fi**
-  the network alone is ~18 ms one-way with ~17 ms jitter, so the ≤20 ms target (a **wired**-LAN
-  spec, §9) is not met over Wi-Fi — the pipeline itself sits at ~9 ms on a clean link. **Use
-  wired Ethernet for the ≤20 ms acceptance** (retest pending).
-- **M6 — config + logging (§10) complete:** JSON both sides, plus a sender heartbeat and the
-  receiver's loss/drift/ring logging; clean signal shutdown.
-- **M7 — auto-start (code complete; install + reboot are user steps):** Windows sender as a
-  crash-restarting auto-start Service (`scripts/install_sender_service.ps1`), macOS receiver as a
-  LaunchAgent/LaunchDaemon (`receiver/install_launchd.sh`).
-
-Remaining: the **wired ≤20 ms** retest and the **2-hour soak** (M8), and the optional
-`driver-win` virtual-output fork (WDK build) so Windows apps route per-app instead of capturing
-the default device.
+Design decisions, the AOO migration, the block-xrun fix, and the full latency
+analysis live in [docs/plan.md](docs/plan.md); requirements & acceptance criteria
+in [spec.md](spec.md).
