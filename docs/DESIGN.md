@@ -128,8 +128,14 @@ Human-editable JSON both sides (see §5.5/§6.5). File logging: startup/shutdown
 device state, the receiver's `buffer fill swing … measured device rate …`
 heartbeat (~5 s), and **AOO's own internal warnings/errors routed into the log**
 via `AooSettings.logFunc` (so they survive the headless Windows service, which has
-no stderr). Clean shutdown on signal; auto-restart via the service / launchd
-`KeepAlive`.
+no stderr). The log is **size-rotated** by the `Logger` (default 5 MB × 3 backups,
+≈ 20 MB cap → `<log>.1` … `<log>.3`) so an always-on auto-start service can't grow
+it without bound; pass `max_bytes = 0` to disable. Clean shutdown on signal;
+auto-restart via the service / launchd `KeepAlive`.
+
+> The launchd job's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/
+> audiopipe-receiver.{out,err}.log`) are a *separate* sink that only catches a few
+> startup `stderr` lines; they're not rotated (use macOS `newsyslog` if needed).
 
 ## 11. Build & targets
 

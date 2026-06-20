@@ -7,6 +7,7 @@ add_executable(core_tests
     test_config.cpp
     test_ring_buffer.cpp
     test_aoo_loopback.cpp
+    test_log.cpp
 )
 
 target_link_libraries(core_tests
