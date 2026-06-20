@@ -93,7 +93,7 @@ scripts/mac_e2e.sh [song.wav]
 | `scripts/` | `setup_macos.sh` / `setup_windows.ps1` (one-shot) + the install/uninstall component scripts |
 | `config/` | Sample `sender.json` / `receiver.json` |
 
-First time building on Windows? Work through [docs/windows-bringup.md](docs/windows-bringup.md).
+First time building on Windows? See the build + troubleshooting section of [docs/DESIGN.md](docs/DESIGN.md).
 For incremental testing before the driver is built, the sender can capture your
 **default output** — set `device_name: ""` in `config/sender.json`.
 
@@ -117,6 +117,6 @@ For incremental testing before the driver is built, the sender can capture your
 - Per-app routing uses the `driver-win` device — install it to route a single app
   instead of capturing the default output.
 
-Design decisions, the AOO migration, the block-xrun fix, and the full latency
-analysis live in [docs/plan.md](docs/plan.md); requirements & acceptance criteria
-in [spec.md](spec.md).
+Requirements, architecture, design decisions (the AOO migration, the block-xrun
+fix, the latency analysis), and acceptance criteria all live in one place:
+[docs/DESIGN.md](docs/DESIGN.md).

@@ -19,7 +19,7 @@
 // listen to. Loss, reorder and cross-rate resampling are reproduced faithfully;
 // clock-drift (`--ppm`) exercises the path but its audible effect is understated
 // here — the synthetic single-process clock can't model two independent hardware
-// clocks the way a real two-machine link does (see docs/plan.md). POSIX sockets
+// clocks the way a real two-machine link does (see docs/DESIGN.md). POSIX sockets
 // are used only as opaque endpoint tokens; builds where the other tools build
 // (macOS/Linux, see tools/CMakeLists.txt).
 

@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
             // NB: a hybrid sleep+busy-spin pacing was tried here to remove OS
             // timer-coalescing jitter; it did NOT reduce the receiver's low-
             // latency buffer swing (the jitter is receiver/scheduling-side on a
-            // single contended box, not sender pacing — see docs/plan.md), so we
+            // single contended box, not sender pacing — see docs/DESIGN.md), so we
             // keep the lightweight sleep_until.
             next += block_dur;
             std::this_thread::sleep_until(next);

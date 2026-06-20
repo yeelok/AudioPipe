@@ -10,7 +10,7 @@ loopback-captures it and streams it to the Mac. So **only audio you route into
 > Why this base (not Scream): Scream does its networking **in the kernel**, which
 > fights this project's userspace-sender architecture (spec §3/§5.3). Virtual-
 > Audio-Driver is a clean virtual endpoint we capture from userspace, keeping all
-> transport logic in the portable `core/`. See `docs/plan.md` for the comparison.
+> transport logic in the portable `core/`. See `docs/DESIGN.md` for the comparison.
 
 This is a **kernel-mode (WDK) driver**. Building/installing it is heavier than the
 rest of the project: it needs the WDK, **test-signing enabled (a reboot)**, and
