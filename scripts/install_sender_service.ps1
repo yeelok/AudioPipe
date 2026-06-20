@@ -33,6 +33,16 @@ if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Run this from an elevated (Administrator) PowerShell."
 }
 
+# Locate the exe: a single-config generator (Ninja) emits build\sender\, while a
+# multi-config generator (Visual Studio) emits build\sender\<Config>\. Accept the
+# default path, otherwise fall back to the Release/Debug subdirectories.
+if (-not (Test-Path $ExePath)) {
+    $dir = Split-Path $ExePath -Parent
+    $alt = @("$dir\Release\audiopipe_sender.exe", "$dir\Debug\audiopipe_sender.exe") |
+           Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($alt) { $ExePath = $alt }
+}
+
 foreach ($f in @($ExePath, $ConfigPath)) {
     if (-not (Test-Path $f)) { throw "Missing required file: $f" }
 }

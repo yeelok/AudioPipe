@@ -48,12 +48,47 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## Quick start — build & install (one command per machine)
+
+Two orchestrator scripts do the whole platform setup (build → driver → install)
+by calling the component scripts under the hood. Run each on its own machine.
+
+**macOS — the receive side:**
+
+```sh
+scripts/setup_macos.sh
+```
+
+Builds the project, builds + installs the **AudioPipe** virtual input device
+(asks for `sudo`), and installs the receiver as a launchd auto-start job.
+Flags: `--tests`, `--no-driver`, `--no-autostart`, `--daemon`, `--uninstall`.
+
+**Windows — the send side (elevated PowerShell):**
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force   # only if scripts are blocked
+.\scripts\setup_windows.ps1 -Start
+```
+
+Builds the sender, builds the **AudioPipe** virtual output driver (needs the WDK),
+and installs the persistent device + the auto-start sender Service. The driver's
+test-signed `.sys` needs Test Mode, so the **first** run enables test-signing and
+asks you to **reboot, then re-run** `.\scripts\setup_windows.ps1 -SkipBuild -Start`.
+Flags: `-SkipBuild`, `-SkipDriver`, `-Start`, `-Uninstall`.
+
+Then set the Windows `config\sender.json` `dest_ip` to the Mac's IP, pick
+**AudioPipe** as the input on the Mac, and route an app to the **AudioPipe**
+output on Windows. The sections below document what each step does and the manual
+equivalents.
+
 ## macOS device + receiver
 
 The **AudioPipe** virtual input device is a BlackHole fork in `driver-mac/` (build-time
 customized to AudioPipe / 2ch / 48 kHz). The **receiver** (`receiver/`) listens for UDP,
 runs the AOO sink (jitter buffer → drift-corrected dynamic resampling), and plays into that
 device via a CoreAudio HAL output unit; apps select "AudioPipe" as a mic.
+`scripts/setup_macos.sh` (above) does the build + device install + auto-start in
+one go — these are the manual equivalents:
 
 ```sh
 # 1. Build + install the device (sudo restarts coreaudiod):
@@ -92,9 +127,11 @@ before the driver fork is finished — set `device_name` accordingly in `config/
 
 ## Install (Windows): device + sender service
 
-With both halves built, install the whole Windows side in one go — the **AudioPipe** virtual
-output device (persistent) **and** the sender as an auto-start, crash-restarting Windows Service.
-From an **elevated** PowerShell (Win+X → *Terminal (Admin)*):
+`scripts\setup_windows.ps1` (the Quick start above) builds **and** installs in one command.
+If you've already built the sender and driver and only want the **install** step — the
+**AudioPipe** virtual output device (persistent) **and** the sender as an auto-start,
+crash-restarting Windows Service — run the install-only orchestrator from an **elevated**
+PowerShell (Win+X → *Terminal (Admin)*):
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force   # see note below
