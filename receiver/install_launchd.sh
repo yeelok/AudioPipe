@@ -38,11 +38,14 @@ INSTALL_CFG="$INSTALL_CFG_DIR/receiver.json"
 SUDO=""
 [ "$MODE" = "daemon" ] && SUDO="sudo"
 
-$SUDO mkdir -p "$(dirname "$INSTALL_BIN")" "$INSTALL_CFG_DIR"
-$SUDO cp "$SRC_BIN" "$INSTALL_BIN"
+# The binary + config live under /usr/local (a root-owned system path on stock
+# macOS, incl. Apple Silicon), so installing them always needs sudo -- regardless
+# of agent vs daemon. Only the agent's plist/logs below are user-level.
+sudo mkdir -p "$(dirname "$INSTALL_BIN")" "$INSTALL_CFG_DIR"
+sudo cp "$SRC_BIN" "$INSTALL_BIN"
 # Don't clobber an existing customized config.
 if [ ! -f "$INSTALL_CFG" ]; then
-    $SUDO cp "$SRC_CFG" "$INSTALL_CFG"
+    sudo cp "$SRC_CFG" "$INSTALL_CFG"
 fi
 
 if [ "$MODE" = "agent" ]; then

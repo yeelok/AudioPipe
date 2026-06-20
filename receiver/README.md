@@ -53,8 +53,9 @@ Select **AudioPipe** as the input in QuickTime / System Settings → Sound to he
 ## Auto-start at boot (§6.4)
 
 `install_launchd.sh` installs the binary + config to stable paths
-(`/usr/local/bin`, `/usr/local/etc/audiopipe`) and registers a launchd job with
-`RunAtLoad` + `KeepAlive` (starts automatically, auto-restarts if it dies).
+(`/usr/local/bin`, `/usr/local/etc/audiopipe` — these are root-owned, so it uses
+`sudo` for that copy in both agent and daemon mode) and registers a launchd job
+with `RunAtLoad` + `KeepAlive` (starts automatically, auto-restarts if it dies).
 
 ```sh
 ./receiver/install_launchd.sh            # per-user LaunchAgent (recommended)
