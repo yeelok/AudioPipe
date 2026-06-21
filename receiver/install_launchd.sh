@@ -78,9 +78,17 @@ if [ "$MODE" = "daemon" ]; then
 fi
 
 # Reload (bootout then bootstrap so re-running picks up changes).
+# bootout is ASYNC: if the job is already loaded (e.g. you're re-running this),
+# firing bootstrap immediately races the still-in-progress teardown and fails with
+# "Bootstrap failed: 5: Input/output error". So wait until the job actually leaves
+# the domain before bootstrapping.
 $SUDO launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+for _ in $(seq 1 50); do
+    $SUDO launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.1
+done
+$SUDO launchctl enable "$DOMAIN/$LABEL" 2>/dev/null || true   # in case a prior run left it disabled
 $SUDO launchctl bootstrap "$DOMAIN" "$PLIST"
-$SUDO launchctl enable "$DOMAIN/$LABEL"
 
 echo "Installed $MODE: $PLIST"
 echo "  binary: $INSTALL_BIN"
