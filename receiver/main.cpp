@@ -159,6 +159,12 @@ AooId            g_src_id   = 0;
 bool             g_have_src = false;
 double           g_fill_min = 1e9, g_fill_max = -1e9;
 
+// True if `ep` is the source endpoint we currently track in g_src_*.
+bool is_tracked_src(const AooEndpoint& ep) {
+    return g_have_src && ep.address != nullptr && ep.addrlen == g_src_len &&
+           ep.id == g_src_id && std::memcmp(ep.address, &g_src_ss, ep.addrlen) == 0;
+}
+
 // Forward AOO's internal log (warnings/errors, e.g. "send buffer overflow")
 // into our Logger. AOO's default sink is stderr; routing it here keeps those
 // messages in the log file alongside our own. Registered via AooSettings below.
@@ -184,7 +190,24 @@ void AOO_CALL on_event(void* /*user*/, const AooEvent* event, AooThreadLevel) {
         g_log->info("aoo: stream start");
         break;
     }
-    case kAooEventStreamStop:    g_log->info("aoo: stream stop"); break;
+    // Stop sampling the fill ratio once the stream ends: the endpoint goes
+    // stale, and polling it every net-thread iteration makes AOO log
+    // "couldn't find source" ~5x/second forever (it floods the log file).
+    // kAooEventSourceRemove is the backstop for a source that vanishes without
+    // a clean stop (sender killed, PC asleep, LAN drop) -- AOO drops it on
+    // timeout and we clear here.
+    case kAooEventStreamStop:
+        if (is_tracked_src(event->streamStop.endpoint)) {
+            g_have_src = false;
+        }
+        g_log->info("aoo: stream stop");
+        break;
+    case kAooEventSourceRemove:
+        if (is_tracked_src(event->sourceRemove.endpoint)) {
+            g_have_src = false;
+        }
+        g_log->info("aoo: source removed");
+        break;
     case kAooEventFormatChange:  g_log->info("aoo: format change"); break;
     case kAooEventBufferUnderrun:g_log->info("aoo: buffer UNDERRUN"); break;
     case kAooEventBufferOverrun: g_log->info("aoo: buffer OVERRUN"); break;
