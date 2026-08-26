@@ -1,7 +1,7 @@
 #include "audiopipe/log.h"
 
 #include <chrono>
-#include <cstdio>   // std::rename, std::remove
+#include <cstdio>   // std::rename, std::remove, std::fprintf
 #include <ctime>
 #include <iomanip>
 
@@ -18,6 +18,14 @@ Logger::Logger(const std::string& path, std::size_t max_bytes, int keep)
         size_ = existing ? static_cast<std::size_t>(existing.tellg()) : 0;
     }
     out_.open(path_, std::ios::app);
+    // Don't fail silently: a log file we can't create (unwritable directory --
+    // e.g. a launchd job whose WorkingDirectory is root-owned and whose
+    // log_file is relative) would otherwise turn every info() below into a
+    // no-op, leaving an always-on service with no diagnostics at all. stderr
+    // is captured by launchd's StandardErrorPath, so this is visible there.
+    if (!out_.is_open()) {
+        std::fprintf(stderr, "log: cannot open '%s' -- file logging disabled\n", path_.c_str());
+    }
 }
 
 // Close the active file, shift <path>.N-1 -> <path>.N (dropping the oldest) and

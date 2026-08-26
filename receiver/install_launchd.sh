@@ -52,17 +52,37 @@ if [ "$MODE" = "agent" ]; then
     PLIST_DIR="$HOME/Library/LaunchAgents"
     STDOUT="$HOME/Library/Logs/audiopipe-receiver.out.log"
     STDERR="$HOME/Library/Logs/audiopipe-receiver.err.log"
+    LOG_FILE="$HOME/Library/Logs/audiopipe-receiver.log"
     DOMAIN="gui/$(id -u)"
 else
     PLIST_DIR="/Library/LaunchDaemons"
     STDOUT="/var/log/audiopipe-receiver.out.log"
     STDERR="/var/log/audiopipe-receiver.err.log"
+    LOG_FILE="/var/log/audiopipe-receiver.log"
     DOMAIN="system"
 fi
 PLIST="$PLIST_DIR/$LABEL.plist"
 
 mkdir -p "$(dirname "$STDOUT")" 2>/dev/null || true
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 $SUDO mkdir -p "$PLIST_DIR"
+
+# The config's log_file must be an ABSOLUTE path. A relative one is resolved
+# against the job's WorkingDirectory ($INSTALL_CFG_DIR), which is root-owned --
+# so a LaunchAgent running as you cannot create the file there and the receiver
+# ends up with no log at all (no heartbeat, no under/overruns, no aoo errors).
+# Only a *relative* value is rewritten: an absolute path is a deliberate choice
+# and an empty/absent key means "file logging off", so both are left alone.
+CUR_LOG="$(sed -nE 's#.*"log_file"[[:space:]]*:[[:space:]]*"([^"]*)".*#\1#p' "$INSTALL_CFG" | head -1)"
+case "$CUR_LOG" in
+    /*|"") ;;   # absolute, or off -- respect it
+    *)
+        sudo sed -i '' -E \
+            "s#(\"log_file\"[[:space:]]*:[[:space:]]*)\"[^\"]*\"#\1\"$LOG_FILE\"#" \
+            "$INSTALL_CFG"
+        echo "Rewrote relative log_file '$CUR_LOG' -> $LOG_FILE"
+        ;;
+esac
 
 # Fill the template.
 sed -e "s#__BIN__#$INSTALL_BIN#g" \
@@ -93,5 +113,6 @@ $SUDO launchctl bootstrap "$DOMAIN" "$PLIST"
 echo "Installed $MODE: $PLIST"
 echo "  binary: $INSTALL_BIN"
 echo "  config: $INSTALL_CFG   (listen_port + device must match the sender)"
-echo "  logs:   $STDOUT / $STDERR  (plus the log_file in the config)"
+echo "  logs:   $STDOUT / $STDERR"
+echo "          $LOG_FILE  (heartbeat, under/overruns, aoo warnings)"
 echo "Status:   launchctl print $DOMAIN/$LABEL | grep -E 'state|pid'"

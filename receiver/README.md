@@ -57,6 +57,15 @@ Select **AudioPipe** as the input in QuickTime / System Settings → Sound to he
 `sudo` for that copy in both agent and daemon mode) and registers a launchd job
 with `RunAtLoad` + `KeepAlive` (starts automatically, auto-restarts if it dies).
 
+Because the job's working directory (`/usr/local/etc/audiopipe`) is root-owned, a
+**relative** `log_file` is unwritable for a LaunchAgent running as you — the
+receiver would run with no log at all. The installer therefore rewrites a
+relative `log_file` to an absolute path (`~/Library/Logs/audiopipe-receiver.log`
+for the agent, `/var/log/audiopipe-receiver.log` for the daemon). An absolute
+path you set yourself is left alone, as is an empty/absent key (file logging
+off). If the log can't be opened, the receiver now says so on stderr — which
+launchd captures in `StandardErrorPath` — instead of failing silently.
+
 ```sh
 ./receiver/install_launchd.sh            # per-user LaunchAgent (recommended)
 ./receiver/install_launchd.sh --daemon   # system LaunchDaemon (boot, no login)
@@ -78,7 +87,8 @@ Check status / logs:
 
 ```sh
 launchctl print gui/$(id -u)/com.audiopipe.receiver | grep -E 'state|pid'   # agent
-tail -f ~/Library/Logs/audiopipe-receiver.err.log
+tail -f ~/Library/Logs/audiopipe-receiver.log        # heartbeat / under-overruns
+tail -f ~/Library/Logs/audiopipe-receiver.err.log    # startup + fatal errors
 ```
 
 > The receiver statically links the AOO library (fetched at configure time and
