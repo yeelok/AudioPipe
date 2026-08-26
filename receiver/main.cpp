@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -49,6 +50,22 @@ constexpr AooInt32 kMaxBlock = 4096; // upper bound for a single render block
 
 std::atomic<bool> g_stop{false};
 void on_signal(int) { g_stop.store(true); }
+
+// Peak sample magnitude seen by the render callback since the last heartbeat.
+// Written on the realtime audio thread, read + reset on the net thread, so it's
+// a lock-free atomic (never a mutex on the audio thread). This is what tells a
+// silent stream apart from a working one: the transport can look perfectly
+// healthy while the sender ships digital silence, and the fill-ratio heartbeat
+// cannot see the difference.
+std::atomic<float> g_peak{0.0f};
+
+// Realtime-safe "atomic max" -- keep the largest value written this interval.
+void peak_observe(float v) {
+    float cur = g_peak.load(std::memory_order_relaxed);
+    while (v > cur && !g_peak.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+        // cur is reloaded by compare_exchange_weak on failure; retry.
+    }
+}
 
 struct RenderCtx {
     AooSink*               sink     = nullptr;
@@ -75,11 +92,15 @@ OSStatus render_cb(void* ref, AudioUnitRenderActionFlags*, const AudioTimeStamp*
     }
     ctx->sink->process(ctx->ptrs.data(), AooInt32(frames), aoo_getCurrentNtpTime(),
                        nullptr, nullptr);
+    float pk = 0.0f;
     for (UInt32 n = 0; n < frames; ++n) {
         for (int c = 0; c < ch; ++c) {
-            out[n * ch + c] = ctx->planar[c][n];
+            const float s = ctx->planar[c][n];
+            out[n * ch + c] = s;
+            pk = std::max(pk, std::fabs(s));
         }
     }
+    peak_observe(pk);
     return noErr;
 }
 
@@ -384,10 +405,23 @@ int main(int argc, char** argv) {
             if (pkts - last_log >= 2400) { // ~5 s heartbeat at 2 ms blocks
                 AooSampleRate sr = 0.0;
                 sink->getRealSampleRate(sr);
-                char line[160];
+                // Peak level since the last heartbeat, in dBFS. "SILENT" means
+                // packets are arriving but every sample is zero -- the stream
+                // itself carries no audio (nothing routed into the sender's
+                // capture device), which no other counter here can reveal.
+                const float pk = g_peak.exchange(0.0f, std::memory_order_relaxed);
+                char peak_str[32];
+                if (pk <= 0.0f) {
+                    std::snprintf(peak_str, sizeof peak_str, "SILENT");
+                } else {
+                    std::snprintf(peak_str, sizeof peak_str, "%.1f dBFS",
+                                  20.0 * std::log10(double(pk)));
+                }
+                char line[200];
                 std::snprintf(line, sizeof line,
-                              "aoo: buffer fill swing %.2f..%.2f  measured device rate %.1f Hz",
-                              g_fill_min, g_fill_max, double(sr));
+                              "aoo: buffer fill swing %.2f..%.2f  measured device rate %.1f Hz"
+                              "  peak %s",
+                              g_fill_min, g_fill_max, double(sr), peak_str);
                 log.info(line);
                 g_fill_min = 1e9;
                 g_fill_max = -1e9;
